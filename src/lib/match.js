@@ -12,8 +12,8 @@ import { supabase } from "@/lib/supabase/client";
 
 // Central match timing constants
 export const COUNTDOWN_SECONDS = 3;
-export const MATCH_DURATION_SECONDS = 60;
-export const TOTAL_MATCH_SECONDS = COUNTDOWN_SECONDS + MATCH_DURATION_SECONDS; // 63s
+export const MATCH_DURATION_SECONDS = 300; // 5 minutes match
+export const TOTAL_MATCH_SECONDS = COUNTDOWN_SECONDS + MATCH_DURATION_SECONDS; // 303s
 
 /**
  * Starts a match authoritatively via start_match_safe RPC.
@@ -40,7 +40,7 @@ export async function startMatch(roomId, playerId) {
 
 /**
  * Finishes a match authoritatively via finish_match_safe RPC.
- * Server verifies that the match duration has actually elapsed.
+ * Server verifies that the match duration (303s) has actually elapsed.
  *
  * @param {string} roomId
  * @returns {Promise<{ success: boolean, room_id: string, status: string, message: string }>}
@@ -57,6 +57,32 @@ export async function finishMatch(roomId) {
 
   const result = Array.isArray(data) ? data[0] : data;
   return result;
+}
+
+/**
+ * Attempts authoritative player-vs-player elimination (eating smaller player).
+ * Server validates distance, score superiority, and bounds to auth.uid().
+ *
+ * @param {string} victimPlayerId
+ * @returns {Promise<{ success: boolean, predator_id: string, victim_id: string, predator_score: number, victim_score: number, stolen_pts: number, message: string }>}
+ */
+export async function eliminatePlayer(victimPlayerId) {
+  try {
+    const { data, error } = await supabase.rpc("eliminate_player_safe", {
+      p_victim_id: victimPlayerId,
+    });
+
+    if (error) {
+      console.warn("[eliminatePlayer] RPC error:", error);
+      return { success: false, message: error.message };
+    }
+
+    const result = Array.isArray(data) ? data[0] : data;
+    return result;
+  } catch (err) {
+    console.warn("[eliminatePlayer] catch:", err);
+    return { success: false, message: err.message };
+  }
 }
 
 /**

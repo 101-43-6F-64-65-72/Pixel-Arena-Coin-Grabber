@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 ### Added
+- Phase 11: Character Active Skills System (`src/lib/skills.js`) with 5 unique skills: ⚡ Hyper Dash, ❄️ Frost Nova (Disrupt/Stun), 🧲 Coin Vortex (Magnet), 🛡️ Aegis Shield (Invincibility), and 💨 Smoke Bomb (Disrupt/Slow).
+- Phase 11: Skill Gacha System (`src/components/SkillBar.js`) allowing players to spin the Gacha Wheel (Cost: 2 Coins) with animated reels, rarity tiers (Common 🔹, Rare 🟣, Legendary 🌟), and slot customization (Slot 1 [SPACE], Slot 2 [Q]).
+- Phase 11: In-Arena Mystery Skill Orbs (🎁) with radiant particle rotation and automatic random skill drops upon collection.
+- Phase 11: Interactive Skill Dock HUD with dynamic cooldown countdowns, active glowing aura rings, and mobile touch support.
+- Phase 11: Realtime multiplayer skill synchronization broadcasting shockwaves, dash trails, frozen ice cages, and shield barriers across peer browsers via Supabase Realtime Broadcast.
+- Phase 10: Worms Zone / Agar.io dynamic player scaling — players expand in radius and diameter based on collected score (`diameter = 32 + sqrt(score)*4.2`).
+- Phase 10: Authoritative PvP combat and player eating — larger players can eliminate smaller players on contact via `eliminate_player_safe` RPC, stealing 50% score and respawning victim.
+- Phase 10: Arena expansion to 1200x750 high-resolution logical coordinates with fixed aspect ratio and retro neon grid floor.
+- Phase 10: High-density coin system with 45 active coins and continuous automatic coin respawn throughout the match.
+- Phase 10: Match timer extended to 5 minutes (300s match time + 3s countdown = 303s authoritative cycle).
+- Phase 10: Live Realtime In-Game Leaderboard with dynamic ranks, golden crown (#1 👑), silver (#2 🥈), bronze (#3 🥉) badges, and real-time score updates.
+- Phase 10: Directional eyes, glowing leader aura, floating score tag, and crown accessory rendered dynamically in `drawPlayer.js`.
+- Phase 10: Resilient guest account fallback in `auth.js` if Supabase Anonymous Auth is disabled in project dashboard.
+- Phase 10: Migration file `supabase/migrations/20261001140000_pvp_growth_expanded_arena.sql`.
 - Phase 9: Strict phase-based input locking across waiting, countdown, playing, and finished states in `GameCanvas.js`.
 - Phase 9: Optimistic coin collection rollback restoring active coin visibility when server rejects collection.
 - Phase 9: Server position preservation on player reconnect/refresh preventing sudden snap to canvas center.

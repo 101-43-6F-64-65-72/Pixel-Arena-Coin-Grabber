@@ -46,8 +46,30 @@
 - [x] Perform comprehensive multiplayer testing with multiple browser sessions.
 - [x] Fix synchronization bugs and edge cases (reconnection, tab focus, host disconnect).
 
-## Phase 7: Vercel deployment.
+## Phase 7: Worms Zone / Agar.io PvP Battle Royale & Map Expansion
+- [x] Expanded arena dimensions from 700x440 to 1200x750 high-definition logical battleground.
+- [x] Increased coin density to 45 concurrent coins with dynamic auto-replenishment upon collection.
+- [x] Extended match duration to 5 minutes (300s match timer + 3s countdown = 303s authoritative cycle).
+- [x] Worms Zone / Agar.io style character growth: Player radius grows dynamically based on collected score (`diameter = 32 + sqrt(score)*4.2`).
+- [x] Authoritative PvP Combat & Elimination: Larger players can eat/eliminate smaller players upon contact, transferring 50% score and respawning the victim (`eliminate_player_safe` RPC).
+- [x] Real-time live HUD Leaderboard with dynamic ranks, gold crown (#1), silver (#2), bronze (#3) badges, and real-time score updates.
+- [x] Resilient auth fallback handling (guest signup fallback if Anonymous Auth toggle is off in dashboard).
+
+## Phase 8: Character Skills, Opponent Disruption & Skill Gacha System
+- [x] Implemented Active Skills Catalog (`src/lib/skills.js`):
+  - ⚡ **Hyper Dash** (`SPACE`): +150% speed boost with trailing particle visual effects.
+  - ❄️ **Frost Nova** (`Q`): Emits a 220px cryogenic shockwave stunning opponents for 1.8s.
+  - 🧲 **Coin Vortex / Magnet** (`E`): Gravitational vacuum pulling all coins within 260px directly to character.
+  - 🛡️ **Aegis Shield** (`F`): Golden invulnerability bubble protecting from predators and stuns.
+  - 💨 **Smoke Bomb** (`R`): Drops a tactical smoke cloud slowing opponents by 60%.
+- [x] Implemented Skill Gacha System (`src/components/SkillBar.js`) with randomized roll animation, tier rankings (Common, Rare, Legendary), and equipment slot customization.
+- [x] Arena Mystery Skill Orbs (🎁): Pulsing mystery crates scattered across arena providing free random skill rolls on contact with 14s auto-respawn.
+- [x] Realtime Multiplayer Status FX Sync: Peer shockwaves, frozen ice cages, shield bubbles, and dash trails synchronized via Supabase Realtime Broadcast.
+
+## Phase 9: Vercel deployment.
 - [ ] Deploy project to Vercel.
 - [ ] Configure environment variables in Vercel.
 - [ ] Verify live functionality.
+
+
 
