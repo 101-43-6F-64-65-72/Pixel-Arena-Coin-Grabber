@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 ### Added
+- Phase 10: Deterministic Player Color Identity with `players.color_key` (`orange`, `purple`, `blue`, `green`) assigned atomically during `create_room_safe` and `join_room_safe` with advisory lock serialization.
+- Phase 10: 2000x1200 Large World and 2D smooth camera tracking (`src/game/camera.js`) with viewport culling, boundary clamping, and mini-radar map.
+- Phase 10: Authoritative Basic Attack (`attack_player_safe` RPC) dealing 20 HP melee damage within 90px range with shield absorption and kill/death tracking.
+- Phase 10: Three Server-Validated Skills: ⚡ Dash (`use_dash_safe`), 🛡️ Shield (`use_shield_safe`), 💥 Shockwave (`use_shockwave_safe`) with server-enforced cooldowns and radii.
+- Phase 10: Authoritative HP, Death & Respawn System (`respawn_player_safe` RPC) with 3s respawn countdown, ghost avatar state, and 1.5s spawn shield.
+- Phase 10: Continuous / Infinite Coin replenishment with instant location recycling within world bounds.
+- Phase 10: Combat Visual FX (`src/game/drawCombat.js`): melee slashes, floating damage numbers, shockwave expansion rings, and hit notifications.
+- Phase 10: Upgraded Arena HUD in `Lobby.js`: live health bar, Kills/Deaths counters, skill cooldown buttons, and color-coded leaderboard.
+- Phase 10: Migration file `supabase/migrations/20261001150000_phase10_combat_skills_world.sql`.
 - Phase 11: Character Active Skills System (`src/lib/skills.js`) with 5 unique skills: ⚡ Hyper Dash, ❄️ Frost Nova (Disrupt/Stun), 🧲 Coin Vortex (Magnet), 🛡️ Aegis Shield (Invincibility), and 💨 Smoke Bomb (Disrupt/Slow).
 - Phase 11: Skill Gacha System (`src/components/SkillBar.js`) allowing players to spin the Gacha Wheel (Cost: 2 Coins) with animated reels, rarity tiers (Common 🔹, Rare 🟣, Legendary 🌟), and slot customization (Slot 1 [SPACE], Slot 2 [Q]).
 - Phase 11: In-Arena Mystery Skill Orbs (🎁) with radiant particle rotation and automatic random skill drops upon collection.

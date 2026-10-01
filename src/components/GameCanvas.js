@@ -1,52 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { WORLD_WIDTH, WORLD_HEIGHT, VIEWPORT_WIDTH, VIEWPORT_HEIGHT, ARENA_PADDING, BASE_PLAYER_SIZE, PLAYER_SPEED, COIN_RADIUS, getPlayerPalette } from "@/lib/arena";
+import { Camera } from "@/game/camera";
 import { drawPlayer } from "@/game/drawPlayer";
 import { drawCoin } from "@/game/drawCoin";
+import { drawCombatEffects } from "@/game/drawCombat";
 import { collectCoin } from "@/lib/coins";
 import { updatePlayerPosition } from "@/lib/movement";
-import { eliminatePlayer } from "@/lib/match";
-import { SKILL_CATALOG, generateMysteryOrbs, rollGachaSkill } from "@/lib/skills";
-import { drawMysteryOrb, drawSkillEffects, drawPlayerStatusAura } from "@/game/drawSkillEffects";
+import { attackPlayer, useDash, useShield, useShockwave, respawnPlayer } from "@/lib/combat";
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+const BROADCAST_THROTTLE_MS = 45; // ~22 Hz peer position broadcast
+const DB_AUTH_SYNC_MS = 250;      // ~4 Hz authoritative database position sync
 
-const LOGICAL_WIDTH = 1200;   // Expanded arena width in pixels
-const LOGICAL_HEIGHT = 750;   // Expanded arena height in pixels
-const ARENA_PADDING = 24;     // Gap between canvas edge and playable boundary
-const BASE_PLAYER_SIZE = 32;  // Base diameter in logical arena pixels
-const PLAYER_SPEED = 210;     // Logical pixels per second
-const COIN_RADIUS = 8;        // Logical pixels
-
-const BROADCAST_THROTTLE_MS = 45;  // ~22 Hz low-latency peer visual broadcast
-const DB_AUTH_SYNC_MS = 300;       // ~3.3 Hz authoritative database position sync
-
-// Color palette for remote players
-const REMOTE_PLAYER_COLORS = [
-  { body: "#3b82f6", stroke: "#1d4ed8" }, // Blue
-  { body: "#10b981", stroke: "#047857" }, // Emerald
-  { body: "#a855f7", stroke: "#7e22ce" }, // Purple
-  { body: "#ec4899", stroke: "#be185d" }, // Pink
-  { body: "#eab308", stroke: "#ca8a04" }, // Yellow
-];
-
-/**
- * Calculates dynamic player diameter based on current score (Worms Zone / Agar.io growth)
- */
-function getPlayerDiameter(score = 0) {
-  return Math.min(88, BASE_PLAYER_SIZE + Math.sqrt(Math.max(0, score)) * 4.2);
-}
-
-/**
- * GameCanvas Component with:
- *   1. 1200x750 Expanded Arena & Responsive scaling
- *   2. Worms Zone / Agar.io dynamic growth scale
- *   3. Authoritative PvP Combat (Player Eating Mechanics)
- *   4. Active Character Skills (Hyper Dash, Frost Nova, Coin Magnet, Aegis Shield, Smoke Bomb)
- *   5. Arena Mystery Skill Orbs (🎁) for free gacha drops
- *   6. Status effects (Frozen stun, Shield invulnerability, Magnet vacuum)
- */
 export default function GameCanvas({
   roomId,
   currentPlayerId,
@@ -55,16 +22,12 @@ export default function GameCanvas({
   matchPhase = "waiting", // "waiting" | "countdown" | "playing" | "finished"
   countdownSeconds = 3,
   isCollectiblesActive = false,
-  equippedSkills = { primary: SKILL_CATALOG.hyper_dash, secondary: SKILL_CATALOG.frost_emp },
-  onEquipSkill,
   skillCooldowns = {},
   onSkillCooldownUpdate,
-  activeSkillEffects = {},
-  onActiveSkillUpdate,
 }) {
   const canvasRef = useRef(null);
 
-  // Keep latest props in refs to avoid stale closures inside animation loops
+  // Props in refs for RAF loop
   const playersRef = useRef(players);
   useEffect(() => { playersRef.current = players; }, [players]);
 
@@ -86,61 +49,37 @@ export default function GameCanvas({
   const isCollectiblesActiveRef = useRef(isCollectiblesActive);
   useEffect(() => { isCollectiblesActiveRef.current = isCollectiblesActive; }, [isCollectiblesActive]);
 
-  const equippedSkillsRef = useRef(equippedSkills);
-  useEffect(() => { equippedSkillsRef.current = equippedSkills; }, [equippedSkills]);
-
-  const skillCooldownsRef = useRef(skillCooldowns);
-  useEffect(() => { skillCooldownsRef.current = skillCooldowns; }, [skillCooldowns]);
-
-  // Remote player state: { [playerId]: { x, y, targetX, targetY, lastUpdated, shieldActive, isFrozen, dashActive, magnetActive } }
+  // Camera & Remote players
+  const cameraRef = useRef(new Camera(VIEWPORT_WIDTH, VIEWPORT_HEIGHT));
   const remotePlayersRef = useRef({});
-
-  // Visual Effects list: [ { id, type, x, y, radius, startTime, duration, color } ]
   const visualEffectsRef = useRef([]);
 
-  // Mystery Skill Orbs on Arena floor (🎁)
-  const mysteryOrbsRef = useRef(generateMysteryOrbs(5));
-
-  // Local active status timers
-  const localStatusRef = useRef({
-    isFrozen: false,
-    frozenUntil: 0,
-    shieldActive: false,
-    shieldUntil: 0,
-    dashActive: false,
-    dashUntil: 0,
-    magnetActive: false,
-    magnetUntil: 0,
-    slowActive: false,
-    slowUntil: 0,
-  });
-
-  // In-flight coin collection and elimination locks
+  // In-flight locks
   const pendingCoinsRef = useRef(new Set());
-  const pendingEliminationsRef = useRef(new Set());
+  const isAttackingRef = useRef(false);
+  const isDashingRef = useRef(false);
+  const isShieldingRef = useRef(false);
+  const isShockwavingRef = useRef(false);
+  const isRespawningRef = useRef(false);
 
-  // Realtime Broadcast channel ref
+  // Realtime Broadcast channel
   const channelRef = useRef(null);
-
-  // Throttling state for position broadcasts
   const lastBroadcastTimeRef = useRef(0);
   const lastSentPosRef = useRef({ x: -999, y: -999 });
-
-  // Throttling state for authoritative database position updates
   const lastDbSyncTimeRef = useRef(0);
-
-  // Last trail spawn time
   const lastTrailTimeRef = useRef(0);
 
-  // Notification Banner (e.g. "🎁 Mystery Orb: Obtained Aegis Shield!")
-  const [skillNotification, setSkillNotification] = useState(null);
-
-  const showNotification = (text) => {
-    setSkillNotification(text);
+  // Notification Toast
+  const [combatNotification, setCombatNotification] = useState(null);
+  const showToast = (msg) => {
+    setCombatNotification(msg);
     setTimeout(() => {
-      setSkillNotification((curr) => (curr === text ? null : curr));
-    }, 2800);
+      setCombatNotification((curr) => (curr === msg ? null : curr));
+    }, 2500);
   };
+
+  // Local movement vector for Dash direction
+  const lastMoveDirRef = useRef({ dx: 1, dy: 0 });
 
   // ── 1. Setup Supabase Realtime Broadcast Channel ────────────────────────────
   useEffect(() => {
@@ -148,9 +87,7 @@ export default function GameCanvas({
 
     const channelName = `room:${roomId}`;
     const channel = supabase.channel(channelName, {
-      config: {
-        broadcast: { self: false },
-      },
+      config: { broadcast: { self: false } },
     });
 
     channelRef.current = channel;
@@ -163,86 +100,53 @@ export default function GameCanvas({
       const senderId = payload.playerId;
       if (!senderId || senderId === currentPlayerIdRef.current) return;
 
-      const { x, y, timestamp, status } = payload;
-      const currentRemotes = remotePlayersRef.current;
-      const existing = currentRemotes[senderId];
+      const { x, y, timestamp, isShielded, hp, alive, colorKey } = payload;
+      const remotes = remotePlayersRef.current;
+      const existing = remotes[senderId];
 
       if (!existing) {
-        currentRemotes[senderId] = {
-          x: typeof x === "number" ? x : LOGICAL_WIDTH / 2,
-          y: typeof y === "number" ? y : LOGICAL_HEIGHT / 2,
-          targetX: typeof x === "number" ? x : LOGICAL_WIDTH / 2,
-          targetY: typeof y === "number" ? y : LOGICAL_HEIGHT / 2,
+        remotes[senderId] = {
+          x: typeof x === "number" ? x : 1000,
+          y: typeof y === "number" ? y : 600,
+          targetX: typeof x === "number" ? x : 1000,
+          targetY: typeof y === "number" ? y : 600,
           lastUpdated: timestamp || Date.now(),
-          status: status || {},
+          isShielded: !!isShielded,
+          hp: typeof hp === "number" ? hp : 100,
+          alive: alive !== false,
+          colorKey: colorKey || "orange",
         };
       } else {
-        if (timestamp && existing.lastUpdated && timestamp < existing.lastUpdated) {
-          return;
-        }
+        if (timestamp && existing.lastUpdated && timestamp < existing.lastUpdated) return;
         existing.targetX = typeof x === "number" ? x : existing.targetX;
         existing.targetY = typeof y === "number" ? y : existing.targetY;
-        if (status) existing.status = status;
+        if (typeof isShielded === "boolean") existing.isShielded = isShielded;
+        if (typeof hp === "number") existing.hp = hp;
+        if (typeof alive === "boolean") existing.alive = alive;
+        if (colorKey) existing.colorKey = colorKey;
         if (timestamp) existing.lastUpdated = timestamp;
       }
     });
 
-    // Skill Cast visual FX broadcast
-    channel.on("broadcast", { event: "skill_cast" }, (event) => {
+    // Combat FX broadcast (slashes, damage numbers, shockwaves)
+    channel.on("broadcast", { event: "combat_fx" }, (event) => {
       const payload = event?.payload;
       if (!payload) return;
-
-      const { skillId, x, y, timestamp } = payload;
-      const skill = SKILL_CATALOG[skillId];
-      if (!skill) return;
 
       visualEffectsRef.current.push({
         id: `fx-${Date.now()}-${Math.random()}`,
-        type: skillId,
-        x: Number(x),
-        y: Number(y),
-        radius: skill.radius || 200,
-        startTime: timestamp || performance.now(),
-        duration: skill.duration || 1.0,
-        color: skill.themeColor,
+        type: payload.type,
+        x: Number(payload.x),
+        y: Number(payload.y),
+        radius: payload.radius || 36,
+        angle: payload.angle || 0,
+        damage: payload.damage || 0,
+        isBlocked: !!payload.isBlocked,
+        isKill: !!payload.isKill,
+        color: payload.color || "#ef4444",
+        startTime: performance.now(),
+        duration: payload.duration || 0.6,
       });
-    });
-
-    // Player Status Effect (Stun / Slow) broadcast
-    channel.on("broadcast", { event: "status_effect" }, (event) => {
-      const payload = event?.payload;
-      if (!payload) return;
-
-      const { targetId, effect, duration } = payload;
-      if (targetId === currentPlayerIdRef.current) {
-        const now = performance.now();
-        // Check if local player is shielded
-        if (localStatusRef.current.shieldActive) {
-          console.log("[Status Effect] Blocked by Aegis Shield!");
-          return;
-        }
-
-        if (effect === "frozen") {
-          localStatusRef.current.isFrozen = true;
-          localStatusRef.current.frozenUntil = now + duration * 1000;
-          showNotification("❄️ YOU ARE FROZEN!");
-        } else if (effect === "slowed") {
-          localStatusRef.current.slowActive = true;
-          localStatusRef.current.slowUntil = now + duration * 1000;
-        }
-      }
-    });
-
-    // Mystery Orb Collected broadcast
-    channel.on("broadcast", { event: "orb_collected" }, (event) => {
-      const payload = event?.payload;
-      if (!payload) return;
-      const { orbId } = payload;
-      const targetOrb = mysteryOrbsRef.current.find((o) => o.id === orbId);
-      if (targetOrb) {
-        targetOrb.active = false;
-        targetOrb.respawnAt = Date.now() + 14000;
-      }
     });
 
     channel.subscribe((status) => {
@@ -252,152 +156,201 @@ export default function GameCanvas({
     });
 
     return () => {
-      if (channel) {
-        supabase.removeChannel(channel);
-      }
+      if (channel) supabase.removeChannel(channel);
       channelRef.current = null;
       remotePlayersRef.current = {};
       pendingCoinsRef.current.clear();
-      pendingEliminationsRef.current.clear();
     };
   }, [roomId, currentPlayerId]);
 
-  // ── 2. Skill Activation Trigger Helper ──────────────────────────────────────
-  const triggerSkill = (skill) => {
-    if (!skill || matchPhaseRef.current !== "playing") return;
+  // ── 2. Combat Action Handlers ───────────────────────────────────────────────
+  const handlePerformAttack = useCallback(async () => {
+    if (matchPhaseRef.current !== "playing" || isAttackingRef.current) return;
 
-    // Check cooldown
-    const cdRemaining = skillCooldownsRef.current[skill.id] || 0;
-    if (cdRemaining > 0) return;
+    const myId = currentPlayerIdRef.current;
+    const myPlayer = playersRef.current?.find((p) => p.id === myId);
+    if (!myPlayer || !myPlayer.alive) return;
 
-    // Check if player is frozen
-    if (localStatusRef.current.isFrozen) return;
+    const myX = myPlayer.x || 1000;
+    const myY = myPlayer.y || 600;
 
-    const now = performance.now();
-    const currentMyId = currentPlayerIdRef.current;
-    const currentChannel = channelRef.current;
+    // Find closest alive enemy player in same room
+    const remotes = remotePlayersRef.current;
+    let closestEnemyId = null;
+    let closestDistSq = 90 * 90; // 90px attack range
 
-    // Apply Cooldown
-    if (onSkillCooldownUpdate) {
-      onSkillCooldownUpdate(skill.id, skill.cooldown);
-    }
+    for (const [remoteId, remoteData] of Object.entries(remotes)) {
+      const rObj = playersRef.current?.find((p) => p.id === remoteId);
+      if (!rObj || !rObj.alive) continue;
 
-    // Set Active duration
-    if (onActiveSkillUpdate) {
-      onActiveSkillUpdate(skill.id, skill.duration);
-    }
-
-    // 1. Hyper Dash
-    if (skill.id === "hyper_dash") {
-      localStatusRef.current.dashActive = true;
-      localStatusRef.current.dashUntil = now + skill.duration * 1000;
-    }
-
-    // 2. Frost Nova (Freeze Shockwave)
-    if (skill.id === "frost_emp") {
-      const myPlayer = playersRef.current?.find((p) => p.id === currentMyId);
-      const px = myPlayer?.x || LOGICAL_WIDTH / 2;
-      const py = myPlayer?.y || LOGICAL_HEIGHT / 2;
-
-      // Add local visual shockwave
-      visualEffectsRef.current.push({
-        id: `fx-${now}`,
-        type: "frost_emp",
-        x: px,
-        y: py,
-        radius: skill.radius,
-        startTime: now,
-        duration: skill.duration,
-        color: skill.themeColor,
-      });
-
-      // Broadcast visual effect to peers
-      if (currentChannel) {
-        currentChannel.send({
-          type: "broadcast",
-          event: "skill_cast",
-          payload: { skillId: "frost_emp", x: px, y: py, timestamp: now },
-        });
-      }
-
-      // Check hits against remote players
-      const remotes = remotePlayersRef.current;
-      for (const [remoteId, remoteData] of Object.entries(remotes)) {
-        const dist = Math.hypot(px - remoteData.x, py - remoteData.y);
-        if (dist <= skill.radius) {
-          // Stun remote player
-          if (currentChannel) {
-            currentChannel.send({
-              type: "broadcast",
-              event: "status_effect",
-              payload: {
-                targetId: remoteId,
-                effect: "frozen",
-                duration: skill.stunDuration,
-                casterId: currentMyId,
-              },
-            });
-          }
-        }
+      const distSq = (myX - remoteData.x) ** 2 + (myY - remoteData.y) ** 2;
+      if (distSq <= closestDistSq) {
+        closestDistSq = distSq;
+        closestEnemyId = remoteId;
       }
     }
 
-    // 3. Coin Magnet
-    if (skill.id === "coin_magnet") {
-      localStatusRef.current.magnetActive = true;
-      localStatusRef.current.magnetUntil = now + skill.duration * 1000;
-    }
-
-    // 4. Aegis Shield
-    if (skill.id === "aegis_shield") {
-      localStatusRef.current.shieldActive = true;
-      localStatusRef.current.shieldUntil = now + skill.duration * 1000;
-    }
-
-    // 5. Smoke Bomb
-    if (skill.id === "smoke_screen") {
-      const myPlayer = playersRef.current?.find((p) => p.id === currentMyId);
-      const px = myPlayer?.x || LOGICAL_WIDTH / 2;
-      const py = myPlayer?.y || LOGICAL_HEIGHT / 2;
-
+    if (!closestEnemyId) {
+      // Slash visual in front of player
+      const dir = lastMoveDirRef.current;
+      const angle = Math.atan2(dir.dy, dir.dx);
       visualEffectsRef.current.push({
-        id: `fx-${now}`,
-        type: "smoke_screen",
-        x: px,
-        y: py,
-        radius: skill.radius,
-        startTime: now,
-        duration: skill.duration,
-        color: skill.themeColor,
+        id: `slash-${Date.now()}`,
+        type: "melee_slash",
+        x: myX + dir.dx * 28,
+        y: myY + dir.dy * 28,
+        radius: 36,
+        angle,
+        color: "#f87171",
+        startTime: performance.now(),
+        duration: 0.35,
       });
+      return;
+    }
 
-      if (currentChannel) {
-        currentChannel.send({
-          type: "broadcast",
-          event: "skill_cast",
-          payload: { skillId: "smoke_screen", x: px, y: py, timestamp: now },
+    isAttackingRef.current = true;
+    try {
+      // Sync local position before attack
+      await updatePlayerPosition(myX, myY);
+      const res = await attackPlayer(closestEnemyId);
+
+      if (res && res.success) {
+        const targetData = remotes[closestEnemyId] || { x: myX, y: myY };
+        const angle = Math.atan2(targetData.y - myY, targetData.x - myX);
+
+        // Add visual slash
+        visualEffectsRef.current.push({
+          id: `slash-${Date.now()}`,
+          type: "melee_slash",
+          x: (myX + targetData.x) / 2,
+          y: (myY + targetData.y) / 2,
+          radius: 40,
+          angle,
+          color: res.is_shielded ? "#fbbf24" : "#ef4444",
+          startTime: performance.now(),
+          duration: 0.35,
         });
 
-        // Slow remote players in smoke radius
-        const remotes = remotePlayersRef.current;
-        for (const [remoteId, remoteData] of Object.entries(remotes)) {
-          const dist = Math.hypot(px - remoteData.x, py - remoteData.y);
-          if (dist <= skill.radius) {
-            currentChannel.send({
-              type: "broadcast",
-              event: "status_effect",
-              payload: {
-                targetId: remoteId,
-                effect: "slowed",
-                duration: skill.duration,
-                casterId: currentMyId,
-              },
-            });
-          }
+        // Add damage number
+        visualEffectsRef.current.push({
+          id: `dmg-${Date.now()}`,
+          type: "damage_text",
+          x: targetData.x,
+          y: targetData.y - 20,
+          damage: res.damage_dealt,
+          isBlocked: res.is_shielded,
+          isKill: res.is_kill,
+          startTime: performance.now(),
+          duration: 0.9,
+        });
+
+        // Broadcast combat FX
+        if (channelRef.current) {
+          channelRef.current.send({
+            type: "broadcast",
+            event: "combat_fx",
+            payload: {
+              type: "damage_text",
+              x: targetData.x,
+              y: targetData.y - 20,
+              damage: res.damage_dealt,
+              isBlocked: res.is_shielded,
+              isKill: res.is_kill,
+            },
+          });
+        }
+
+        if (res.is_shielded) {
+          showToast("🛡️ Enemy Shielded! Attack Blocked.");
+        } else if (res.is_kill) {
+          showToast("💀 ENEMY DEFEATED! (+1 Kill)");
         }
       }
+    } finally {
+      setTimeout(() => { isAttackingRef.current = false; }, 400);
     }
-  };
+  }, []);
+
+  const handlePerformDash = useCallback(async () => {
+    if (matchPhaseRef.current !== "playing" || isDashingRef.current) return;
+    const myId = currentPlayerIdRef.current;
+    const myPlayer = playersRef.current?.find((p) => p.id === myId);
+    if (!myPlayer || !myPlayer.alive) return;
+
+    const dir = lastMoveDirRef.current;
+    isDashingRef.current = true;
+
+    try {
+      const res = await useDash(dir.dx, dir.dy);
+      if (res && res.success) {
+        if (onSkillCooldownUpdate) onSkillCooldownUpdate("dash", 4);
+        showToast("⚡ DASH!");
+      }
+    } finally {
+      setTimeout(() => { isDashingRef.current = false; }, 600);
+    }
+  }, [onSkillCooldownUpdate]);
+
+  const handlePerformShield = useCallback(async () => {
+    if (matchPhaseRef.current !== "playing" || isShieldingRef.current) return;
+    const myId = currentPlayerIdRef.current;
+    const myPlayer = playersRef.current?.find((p) => p.id === myId);
+    if (!myPlayer || !myPlayer.alive) return;
+
+    isShieldingRef.current = true;
+    try {
+      const res = await useShield();
+      if (res && res.success) {
+        if (onSkillCooldownUpdate) onSkillCooldownUpdate("shield", 8);
+        showToast("🛡️ AEGIS SHIELD (2s)");
+      }
+    } finally {
+      setTimeout(() => { isShieldingRef.current = false; }, 600);
+    }
+  }, [onSkillCooldownUpdate]);
+
+  const handlePerformShockwave = useCallback(async () => {
+    if (matchPhaseRef.current !== "playing" || isShockwavingRef.current) return;
+    const myId = currentPlayerIdRef.current;
+    const myPlayer = playersRef.current?.find((p) => p.id === myId);
+    if (!myPlayer || !myPlayer.alive) return;
+
+    isShockwavingRef.current = true;
+    try {
+      const res = await useShockwave();
+      if (res && res.success) {
+        if (onSkillCooldownUpdate) onSkillCooldownUpdate("shockwave", 7);
+
+        const now = performance.now();
+        visualEffectsRef.current.push({
+          id: `shock-${now}`,
+          type: "shockwave",
+          x: myPlayer.x,
+          y: myPlayer.y,
+          radius: 170,
+          startTime: now,
+          duration: 0.65,
+        });
+
+        if (channelRef.current) {
+          channelRef.current.send({
+            type: "broadcast",
+            event: "combat_fx",
+            payload: {
+              type: "shockwave",
+              x: myPlayer.x,
+              y: myPlayer.y,
+              radius: 170,
+            },
+          });
+        }
+
+        showToast(`💥 SHOCKWAVE! Hit ${res.hits_count} Enemies`);
+      }
+    } finally {
+      setTimeout(() => { isShockwavingRef.current = false; }, 600);
+    }
+  }, [onSkillCooldownUpdate]);
 
   // ── 3. Main Game Engine & Canvas Loop ───────────────────────────────────────
   useEffect(() => {
@@ -405,14 +358,13 @@ export default function GameCanvas({
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
+    const camera = cameraRef.current;
 
-    // Local player position (in logical canvas coordinates 1200x750)
     const player = {
-      x: LOGICAL_WIDTH / 2,
-      y: LOGICAL_HEIGHT / 2,
+      x: 1000,
+      y: 600,
     };
 
-    // Keys currently held down
     const keys = {
       up: false,
       down: false,
@@ -420,35 +372,30 @@ export default function GameCanvas({
       right: false,
     };
 
-    function clampPlayer(pSize = BASE_PLAYER_SIZE) {
-      const r = pSize / 2;
+    function clampPlayer() {
+      const r = BASE_PLAYER_SIZE / 2;
       const minX = ARENA_PADDING + r;
-      const maxX = LOGICAL_WIDTH - ARENA_PADDING - r;
+      const maxX = WORLD_WIDTH - ARENA_PADDING - r;
       const minY = ARENA_PADDING + r;
-      const maxY = LOGICAL_HEIGHT - ARENA_PADDING - r;
+      const maxY = WORLD_HEIGHT - ARENA_PADDING - r;
 
       player.x = Math.max(minX, Math.min(maxX, player.x));
       player.y = Math.max(minY, Math.min(maxY, player.y));
     }
 
-    // Initialize spawn position (preserving server position if available)
+    // Initialize local position from DB if exists
     const myId = currentPlayerIdRef.current;
     const myData = playersRef.current?.find((p) => p.id === myId);
     if (myData && typeof myData.x === "number" && myData.x > 0 && typeof myData.y === "number" && myData.y > 0) {
       player.x = Number(myData.x);
       player.y = Number(myData.y);
-      clampPlayer(getPlayerDiameter(myData.score));
-    } else {
-      player.x = LOGICAL_WIDTH / 2;
-      player.y = LOGICAL_HEIGHT / 2;
+      clampPlayer();
+      camera.snapTo(player.x, player.y);
     }
-    updatePlayerPosition(player.x, player.y).catch(() => {});
 
-    // Input handlers
     const MOVEMENT_KEYS = new Set([
       "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-      "w", "a", "s", "d",
-      "W", "A", "S", "D",
+      "w", "a", "s", "d", "W", "A", "S", "D",
     ]);
 
     function handleKeyDown(e) {
@@ -461,7 +408,10 @@ export default function GameCanvas({
         return;
       }
 
-      // Movement
+      // Check if player alive
+      const curMe = playersRef.current?.find((p) => p.id === currentPlayerIdRef.current);
+      if (curMe && !curMe.alive) return;
+
       switch (e.key) {
         case "ArrowUp":    case "w": case "W": keys.up    = true; break;
         case "ArrowDown":  case "s": case "S": keys.down  = true; break;
@@ -469,15 +419,15 @@ export default function GameCanvas({
         case "ArrowRight": case "d": case "D": keys.right = true; break;
       }
 
-      // Skill Hotkeys: Space (Primary), Q (Secondary), E/F/R
-      if (e.code === "Space" || e.key === "1") {
-        triggerSkill(equippedSkillsRef.current.primary);
-      } else if (e.code === "KeyQ" || e.key === "2") {
-        triggerSkill(equippedSkillsRef.current.secondary);
+      // Skill Hotkeys: Q (Dash), E (Shield), R (Shockwave), Space/F (Basic Attack)
+      if (e.code === "KeyQ") {
+        handlePerformDash();
       } else if (e.code === "KeyE") {
-        triggerSkill(SKILL_CATALOG.coin_magnet);
-      } else if (e.code === "KeyF") {
-        triggerSkill(SKILL_CATALOG.aegis_shield);
+        handlePerformShield();
+      } else if (e.code === "KeyR") {
+        handlePerformShockwave();
+      } else if (e.code === "Space" || e.code === "KeyF") {
+        handlePerformAttack();
       }
     }
 
@@ -490,13 +440,18 @@ export default function GameCanvas({
       }
     }
 
+    function handleCanvasClick() {
+      handlePerformAttack();
+    }
+
     function handleBlur() {
       keys.up = keys.down = keys.left = keys.right = false;
     }
 
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup",   handleKeyUp);
-    window.addEventListener("blur",    handleBlur);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+    canvas.addEventListener("click", handleCanvasClick);
 
     // ── Render Loop ───────────────────────────────────────────────────────────
     let lastTime = null;
@@ -510,28 +465,28 @@ export default function GameCanvas({
       const currentPlayers = playersRef.current || [];
       const currentMyId = currentPlayerIdRef.current;
       const myPlayerObj = currentPlayers.find((p) => p.id === currentMyId);
-      const myScore = myPlayerObj?.score ?? 0;
-      const myDiameter = getPlayerDiameter(myScore);
-      const myRadius = myDiameter / 2;
+      const isAlive = myPlayerObj?.alive !== false;
 
-      const nowTime = performance.now();
-      const status = localStatusRef.current;
+      // Handle Respawn Trigger if dead
+      if (!isAlive && myPlayerObj?.respawn_at && !isRespawningRef.current) {
+        const respawnTime = new Date(myPlayerObj.respawn_at).getTime();
+        if (Date.now() >= respawnTime) {
+          isRespawningRef.current = true;
+          respawnPlayer().then((res) => {
+            if (res && res.success) {
+              player.x = Number(res.new_x);
+              player.y = Number(res.new_y);
+              camera.snapTo(player.x, player.y);
+              showToast("✨ RESPAWNED (Spawn Shield 1.5s)");
+            }
+          }).finally(() => {
+            setTimeout(() => { isRespawningRef.current = false; }, 1000);
+          });
+        }
+      }
 
-      // Update status effect expiration timers
-      if (status.isFrozen && nowTime >= status.frozenUntil) status.isFrozen = false;
-      if (status.shieldActive && nowTime >= status.shieldUntil) status.shieldActive = false;
-      if (status.dashActive && nowTime >= status.dashUntil) status.dashActive = false;
-      if (status.magnetActive && nowTime >= status.magnetUntil) status.magnetActive = false;
-      if (status.slowActive && nowTime >= status.slowUntil) status.slowActive = false;
-
-      // Calculate effective movement speed
-      let effectiveSpeed = PLAYER_SPEED;
-      if (status.dashActive) effectiveSpeed *= SKILL_CATALOG.hyper_dash.speedMultiplier;
-      if (status.slowActive) effectiveSpeed *= 0.4;
-      if (status.isFrozen) effectiveSpeed = 0; // Stunned
-
-      // 1. Move Local Player (Active only in playing phase)
-      if (currentPhase === "playing" && !status.isFrozen) {
+      // 1. Move Local Player (Active only when match is playing & alive)
+      if (currentPhase === "playing" && isAlive) {
         let dx = 0;
         let dy = 0;
         if (keys.up)    dy -= 1;
@@ -546,39 +501,29 @@ export default function GameCanvas({
         }
 
         if (dx !== 0 || dy !== 0) {
-          player.x += dx * effectiveSpeed * dt;
-          player.y += dy * effectiveSpeed * dt;
-          clampPlayer(myDiameter);
-
-          // Dash trail particles
-          if (status.dashActive && timestamp - lastTrailTimeRef.current > 40) {
-            visualEffectsRef.current.push({
-              id: `trail-${timestamp}`,
-              type: "dash_trail",
-              x: player.x,
-              y: player.y,
-              radius: myRadius * 0.8,
-              startTime: timestamp,
-              duration: 0.35,
-              color: "#38bdf8",
-            });
-            lastTrailTimeRef.current = timestamp;
-          }
+          lastMoveDirRef.current = { dx, dy };
+          player.x += dx * PLAYER_SPEED * dt;
+          player.y += dy * PLAYER_SPEED * dt;
+          clampPlayer();
         }
-      } else if (status.isFrozen || currentPhase !== "playing") {
+      } else {
         keys.up = keys.down = keys.left = keys.right = false;
       }
 
+      // Smooth Camera follow
+      camera.follow(player.x, player.y, 0.18);
+
       const epochNow = Date.now();
       const currentChannel = channelRef.current;
+      const isShielded = myPlayerObj?.shield_until && new Date(myPlayerObj.shield_until).getTime() > epochNow;
 
-      // 2. Broadcast Local Position & Active Status
+      // 2. Broadcast Position & Status to Peers
       if (currentChannel && currentMyId && epochNow - lastBroadcastTimeRef.current >= BROADCAST_THROTTLE_MS) {
         const distMoved =
           Math.abs(player.x - lastSentPosRef.current.x) +
           Math.abs(player.y - lastSentPosRef.current.y);
 
-        if (distMoved > 0.05 || status.shieldActive || status.isFrozen || status.dashActive) {
+        if (distMoved > 0.05 || isShielded) {
           currentChannel.send({
             type: "broadcast",
             event: "move",
@@ -587,13 +532,11 @@ export default function GameCanvas({
               playerId: currentMyId,
               x: Math.round(player.x * 10) / 10,
               y: Math.round(player.y * 10) / 10,
+              isShielded: !!isShielded,
+              hp: myPlayerObj?.hp ?? 100,
+              alive: isAlive,
+              colorKey: myPlayerObj?.color_key || "orange",
               timestamp: epochNow,
-              status: {
-                shieldActive: status.shieldActive,
-                isFrozen: status.isFrozen,
-                dashActive: status.dashActive,
-                magnetActive: status.magnetActive,
-              },
             },
           });
           lastBroadcastTimeRef.current = epochNow;
@@ -601,45 +544,23 @@ export default function GameCanvas({
         }
       }
 
-      // 3. Authoritative Database Position Sync (Throttled ~3.3 Hz, only during playing)
-      if (currentMyId && epochNow - lastDbSyncTimeRef.current >= DB_AUTH_SYNC_MS && currentPhase === "playing") {
+      // 3. Authoritative Database Position Sync (~4 Hz)
+      if (currentMyId && epochNow - lastDbSyncTimeRef.current >= DB_AUTH_SYNC_MS && currentPhase === "playing" && isAlive) {
         lastDbSyncTimeRef.current = epochNow;
         updatePlayerPosition(player.x, player.y).then((res) => {
           if (res && !res.success && res.reason === "movement_exceeded") {
             player.x = Number(res.x);
             player.y = Number(res.y);
-            clampPlayer(myDiameter);
+            clampPlayer();
           }
         });
       }
 
-      // 4. Coin Magnet Field Logic: Pull coins toward local player
-      const activeCoins = coinsRef.current || [];
-      if (status.magnetActive && currentPhase === "playing") {
-        const magRadius = SKILL_CATALOG.coin_magnet.radius;
-        const pullSpeed = SKILL_CATALOG.coin_magnet.pullSpeed;
-
-        for (let i = 0; i < activeCoins.length; i++) {
-          const coin = activeCoins[i];
-          if (!coin || !coin.active) continue;
-
-          const cx = Number(coin.x);
-          const cy = Number(coin.y);
-          const dist = Math.hypot(player.x - cx, player.y - cy);
-
-          if (dist > 0 && dist <= magRadius) {
-            const pullDx = (player.x - cx) / dist;
-            const pullDy = (player.y - cy) / dist;
-            coin.x = cx + pullDx * pullSpeed * dt;
-            coin.y = cy + pullDy * pullSpeed * dt;
-          }
-        }
-      }
-
-      // 5. Collision Detection with Active Coins
-      if (isCollectiblesActiveRef.current && currentPhase === "playing") {
+      // 4. Coin Collection Check (Continuous / Infinite respawn)
+      if (isCollectiblesActiveRef.current && currentPhase === "playing" && isAlive) {
+        const activeCoins = coinsRef.current || [];
         const pendingSet = pendingCoinsRef.current;
-        const currentCollectionRadius = myRadius + COIN_RADIUS;
+        const collectionRadius = BASE_PLAYER_SIZE / 2 + COIN_RADIUS;
 
         for (let i = 0; i < activeCoins.length; i++) {
           const coin = activeCoins[i];
@@ -647,21 +568,19 @@ export default function GameCanvas({
           if (pendingSet.has(coin.id)) continue;
 
           const distance = Math.hypot(player.x - Number(coin.x), player.y - Number(coin.y));
-
-          if (distance <= currentCollectionRadius) {
+          if (distance <= collectionRadius) {
             pendingSet.add(coin.id);
-            coin.active = false; // Optimistic hide locally
+            coin.active = false; // Optimistic
 
             updatePlayerPosition(player.x, player.y)
               .then(() => collectCoin(coin.id, currentMyId))
               .then((result) => {
                 if (!result || !result.success) {
-                  coin.active = true; // Rollback
+                  coin.active = true;
                 }
               })
-              .catch((err) => {
-                console.error("[GameCanvas] Coin collection error:", err);
-                coin.active = true; // Rollback
+              .catch(() => {
+                coin.active = true;
               })
               .finally(() => {
                 pendingSet.delete(coin.id);
@@ -670,228 +589,207 @@ export default function GameCanvas({
         }
       }
 
-      // 6. Mystery Skill Orbs (🎁) Collision & Auto-Respawn
-      const orbs = mysteryOrbsRef.current;
-      for (const orb of orbs) {
-        if (!orb.active && orb.respawnAt && epochNow >= orb.respawnAt) {
-          orb.active = true;
-          orb.x = Math.round(60 + Math.random() * 1080);
-          orb.y = Math.round(60 + Math.random() * 630);
-        }
+      // ── 5. RENDER CANVAS (Camera-Relative) ───────────────────────────────────
+      ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 
-        if (orb.active && currentPhase === "playing") {
-          const dist = Math.hypot(player.x - orb.x, player.y - orb.y);
-          if (dist <= myRadius + 18) {
-            orb.active = false;
-            orb.respawnAt = epochNow + 14000;
+      // Arena Floor relative to camera
+      const floorScreen = camera.worldToScreen(ARENA_PADDING, ARENA_PADDING);
+      const arenaW = WORLD_WIDTH - ARENA_PADDING * 2;
+      const arenaH = WORLD_HEIGHT - ARENA_PADDING * 2;
 
-            // Broadcast orb pickup to peers
-            if (currentChannel) {
-              currentChannel.send({
-                type: "broadcast",
-                event: "orb_collected",
-                payload: { orbId: orb.id },
-              });
-            }
+      ctx.fillStyle = "#18181b"; // zinc-900 floor
+      ctx.fillRect(floorScreen.x, floorScreen.y, arenaW, arenaH);
 
-            // Roll Mystery Skill
-            const rolled = rollGachaSkill(equippedSkillsRef.current.primary?.id);
-            if (onEquipSkill) {
-              onEquipSkill("secondary", rolled);
-            }
-            showNotification(`🎁 Mystery Orb: Obtained ${rolled.name}!`);
-          }
-        }
-      }
-
-      // 7. PvP Combat: Player Eating Mechanics
-      if (currentPhase === "playing") {
-        const remotes = remotePlayersRef.current;
-        const elimSet = pendingEliminationsRef.current;
-
-        for (const [remoteId, remoteData] of Object.entries(remotes)) {
-          if (elimSet.has(remoteId)) continue;
-
-          // If remote player is shielded, they cannot be eaten
-          if (remoteData.status?.shieldActive) continue;
-
-          const remoteObj = currentPlayers.find((p) => p.id === remoteId);
-          if (!remoteObj) continue;
-
-          const remoteScore = remoteObj.score ?? 0;
-          const remoteDiameter = getPlayerDiameter(remoteScore);
-          const remoteRadius = remoteDiameter / 2;
-
-          const distanceBetween = Math.hypot(player.x - remoteData.x, player.y - remoteData.y);
-
-          // If local player is larger and collides with smaller player
-          if (myScore > remoteScore && distanceBetween <= myRadius + remoteRadius * 0.7) {
-            elimSet.add(remoteId);
-
-            eliminatePlayer(remoteId)
-              .then((res) => {
-                if (res && res.success) {
-                  showNotification(`⚔️ Eaten ${remoteObj.nickname}! (+${res.stolen_pts} pts)`);
-                }
-              })
-              .finally(() => {
-                setTimeout(() => elimSet.delete(remoteId), 1500);
-              });
-          }
-        }
-      }
-
-      // 8. Clean canvas frame buffer (1200x750)
-      ctx.clearRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
-
-      const arenaW = LOGICAL_WIDTH - ARENA_PADDING * 2;
-      const arenaH = LOGICAL_HEIGHT - ARENA_PADDING * 2;
-
-      // Arena Floor
-      ctx.fillStyle = "#18181b"; // zinc-900
-      ctx.fillRect(ARENA_PADDING, ARENA_PADDING, arenaW, arenaH);
-
-      // Arena Retro Pixel Grid
+      // Retro Neon Grid
       ctx.strokeStyle = "rgba(255, 255, 255, 0.035)";
       ctx.lineWidth = 1;
-      const gridSize = 40;
-      for (let gx = ARENA_PADDING + gridSize; gx < ARENA_PADDING + arenaW; gx += gridSize) {
+      const gridSize = 50;
+
+      const startGridX = Math.floor(camera.x / gridSize) * gridSize;
+      const endGridX = Math.ceil((camera.x + VIEWPORT_WIDTH) / gridSize) * gridSize;
+      for (let gx = startGridX; gx <= endGridX; gx += gridSize) {
+        if (gx < ARENA_PADDING || gx > WORLD_WIDTH - ARENA_PADDING) continue;
+        const s = camera.worldToScreen(gx, ARENA_PADDING);
         ctx.beginPath();
-        ctx.moveTo(gx, ARENA_PADDING);
-        ctx.lineTo(gx, ARENA_PADDING + arenaH);
+        ctx.moveTo(s.x, camera.worldToScreen(gx, ARENA_PADDING).y);
+        ctx.lineTo(s.x, camera.worldToScreen(gx, WORLD_HEIGHT - ARENA_PADDING).y);
         ctx.stroke();
       }
-      for (let gy = ARENA_PADDING + gridSize; gy < ARENA_PADDING + arenaH; gy += gridSize) {
+
+      const startGridY = Math.floor(camera.y / gridSize) * gridSize;
+      const endGridY = Math.ceil((camera.y + VIEWPORT_HEIGHT) / gridSize) * gridSize;
+      for (let gy = startGridY; gy <= endGridY; gy += gridSize) {
+        if (gy < ARENA_PADDING || gy > WORLD_HEIGHT - ARENA_PADDING) continue;
+        const s = camera.worldToScreen(ARENA_PADDING, gy);
         ctx.beginPath();
-        ctx.moveTo(ARENA_PADDING, gy);
-        ctx.lineTo(ARENA_PADDING + arenaW, gy);
+        ctx.moveTo(camera.worldToScreen(ARENA_PADDING, gy).x, s.y);
+        ctx.lineTo(camera.worldToScreen(WORLD_WIDTH - ARENA_PADDING, gy).x, s.y);
         ctx.stroke();
       }
 
       // Arena Outer Border
       ctx.strokeStyle = "#52525b"; // zinc-600
       ctx.lineWidth = 4;
-      ctx.strokeRect(ARENA_PADDING, ARENA_PADDING, arenaW, arenaH);
+      ctx.strokeRect(floorScreen.x, floorScreen.y, arenaW, arenaH);
 
-      // Corner accent markers
-      ctx.fillStyle = "#f97316";
-      const markerSize = 8;
-      ctx.fillRect(ARENA_PADDING - 2, ARENA_PADDING - 2, markerSize, markerSize);
-      ctx.fillRect(ARENA_PADDING + arenaW - markerSize + 2, ARENA_PADDING - 2, markerSize, markerSize);
-      ctx.fillRect(ARENA_PADDING - 2, ARENA_PADDING + arenaH - markerSize + 2, markerSize, markerSize);
-      ctx.fillRect(ARENA_PADDING + arenaW - markerSize + 2, ARENA_PADDING + arenaH - markerSize + 2, markerSize, markerSize);
-
-      // 9. Draw Active Coins (Gold Collectibles)
+      // 6. Draw Active Coins (Camera-relative)
+      const activeCoins = coinsRef.current || [];
       for (let i = 0; i < activeCoins.length; i++) {
         const coin = activeCoins[i];
-        if (coin && coin.active) {
-          drawCoin(ctx, Number(coin.x), Number(coin.y), COIN_RADIUS);
+        if (coin && coin.active && camera.isVisible(Number(coin.x), Number(coin.y), 20)) {
+          const s = camera.worldToScreen(Number(coin.x), Number(coin.y));
+          drawCoin(ctx, s.x, s.y, COIN_RADIUS);
         }
       }
 
-      // 10. Draw Mystery Skill Orbs (🎁)
-      for (const orb of mysteryOrbsRef.current) {
-        drawMysteryOrb(ctx, orb, timestamp);
-      }
-
-      // 11. Draw Active Visual FX (Shockwaves, Dash Trails, Smoke Clouds)
-      drawSkillEffects(ctx, visualEffectsRef.current, timestamp);
-      // Clean expired FX
+      // 7. Draw Combat Effects (Camera-relative)
+      const screenFx = visualEffectsRef.current.map((fx) => {
+        const s = camera.worldToScreen(fx.x, fx.y);
+        return { ...fx, x: s.x, y: s.y };
+      });
+      drawCombatEffects(ctx, screenFx, timestamp);
       visualEffectsRef.current = visualEffectsRef.current.filter(
         (fx) => (timestamp - fx.startTime) / 1000 < fx.duration
       );
 
-      // 12. Find Leader
+      // 8. Find Leader
       const highestScore = currentPlayers.reduce((max, p) => Math.max(max, p.score ?? 0), 0);
-      const remotePlayerIds = currentPlayers
-        .map((p) => p.id)
-        .filter((id) => id !== currentMyId);
 
-      // 13. Draw Remote Players
+      // 9. Draw Remote Players (Camera-relative, Authoritative color & HP)
       const remotes = remotePlayersRef.current;
       for (const [remoteId, remoteData] of Object.entries(remotes)) {
         remoteData.x += (remoteData.targetX - remoteData.x) * 0.25;
         remoteData.y += (remoteData.targetY - remoteData.y) * 0.25;
 
-        const colorIndex = Math.max(0, remotePlayerIds.indexOf(remoteId)) % REMOTE_PLAYER_COLORS.length;
-        const color = REMOTE_PLAYER_COLORS[colorIndex];
-        const remoteObj = currentPlayers.find((p) => p.id === remoteId);
-        const remoteScore = remoteObj?.score ?? 0;
-        const remoteSize = getPlayerDiameter(remoteScore);
-        const isLeader = remoteScore === highestScore && highestScore > 0;
+        if (camera.isVisible(remoteData.x, remoteData.y, 50)) {
+          const s = camera.worldToScreen(remoteData.x, remoteData.y);
+          const remoteObj = currentPlayers.find((p) => p.id === remoteId);
+          const rScore = remoteObj?.score ?? 0;
+          const rHp = remoteObj?.hp ?? remoteData.hp ?? 100;
+          const rAlive = remoteObj ? remoteObj.alive : remoteData.alive;
+          const rColorKey = remoteObj?.color_key || remoteData.colorKey || "purple";
+          const rShielded = remoteObj?.shield_until && new Date(remoteObj.shield_until).getTime() > epochNow;
 
-        drawPlayer(ctx, remoteData.x, remoteData.y, remoteSize, {
-          bodyColor: color.body,
-          strokeColor: color.stroke,
-          nickname: remoteObj?.nickname || "Player",
-          score: remoteScore,
-          isLeader,
-        });
+          let rRespawnSecs = 0;
+          if (!rAlive && remoteObj?.respawn_at) {
+            rRespawnSecs = Math.max(0, (new Date(remoteObj.respawn_at).getTime() - epochNow) / 1000);
+          }
 
-        // Draw Remote Player Status Aura (Shield, Stun, Magnet)
-        drawPlayerStatusAura(
-          ctx,
-          { x: remoteData.x, y: remoteData.y, size: remoteSize },
-          remoteData.status || {},
-          timestamp
-        );
+          drawPlayer(ctx, s.x, s.y, BASE_PLAYER_SIZE, {
+            colorKey: rColorKey,
+            nickname: remoteObj?.nickname || "Player",
+            score: rScore,
+            hp: rHp,
+            maxHp: 100,
+            alive: rAlive,
+            isLeader: rScore === highestScore && highestScore > 0,
+            isShielded: !!rShielded,
+            respawnSecs: rRespawnSecs,
+          });
+        }
       }
 
-      // 14. Draw Local Player
-      const isMyLeader = myScore === highestScore && highestScore > 0;
-      drawPlayer(ctx, player.x, player.y, myDiameter, {
-        bodyColor: "#f97316",
-        strokeColor: "#c2410c",
+      // 10. Draw Local Player (Camera-relative, Authoritative color & HP)
+      const myScreen = camera.worldToScreen(player.x, player.y);
+      const myScore = myPlayerObj?.score ?? 0;
+      const myHp = myPlayerObj?.hp ?? 100;
+      const myColorKey = myPlayerObj?.color_key || "orange";
+      let myRespawnSecs = 0;
+      if (!isAlive && myPlayerObj?.respawn_at) {
+        myRespawnSecs = Math.max(0, (new Date(myPlayerObj.respawn_at).getTime() - epochNow) / 1000);
+      }
+
+      drawPlayer(ctx, myScreen.x, myScreen.y, BASE_PLAYER_SIZE, {
+        colorKey: myColorKey,
         nickname: `${myPlayerObj?.nickname || "You"} (You)`,
         score: myScore,
-        isLeader: isMyLeader,
+        hp: myHp,
+        maxHp: 100,
+        alive: isAlive,
+        isLeader: myScore === highestScore && highestScore > 0,
+        isShielded: !!isShielded,
+        respawnSecs: myRespawnSecs,
       });
 
-      // Draw Local Player Status Aura
-      drawPlayerStatusAura(
-        ctx,
-        { x: player.x, y: player.y, size: myDiameter },
-        status,
-        timestamp
+      // 11. Minimap (Bottom-Right Radar)
+      const miniW = 160;
+      const miniH = 96;
+      const miniX = VIEWPORT_WIDTH - miniW - 14;
+      const miniY = VIEWPORT_HEIGHT - miniH - 14;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(9, 9, 11, 0.85)";
+      ctx.fillRect(miniX, miniY, miniW, miniH);
+      ctx.strokeStyle = "#3f3f46";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(miniX, miniY, miniW, miniH);
+
+      // Minimap viewport box
+      const scaleX = miniW / WORLD_WIDTH;
+      const scaleY = miniH / WORLD_HEIGHT;
+      ctx.strokeStyle = "rgba(250, 204, 21, 0.5)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        miniX + camera.x * scaleX,
+        miniY + camera.y * scaleY,
+        VIEWPORT_WIDTH * scaleX,
+        VIEWPORT_HEIGHT * scaleY
       );
 
-      // 15. Waiting Phase Overlay
+      // Minimap coins
+      ctx.fillStyle = "#eab308";
+      for (const coin of activeCoins) {
+        if (coin.active) {
+          ctx.fillRect(miniX + coin.x * scaleX - 1, miniY + coin.y * scaleY - 1, 2, 2);
+        }
+      }
+
+      // Minimap remote players
+      for (const [rId, rData] of Object.entries(remotes)) {
+        const rObj = currentPlayers.find((p) => p.id === rId);
+        const palette = getPlayerPalette(rObj?.color_key || "purple");
+        ctx.fillStyle = palette.body;
+        ctx.beginPath();
+        ctx.arc(miniX + rData.x * scaleX, miniY + rData.y * scaleY, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Minimap local player
+      const myPal = getPlayerPalette(myColorKey);
+      ctx.fillStyle = myPal.body;
+      ctx.beginPath();
+      ctx.arc(miniX + player.x * scaleX, miniY + player.y * scaleY, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.restore();
+
+      // 12. Waiting Phase Overlay
       if (currentPhase === "waiting") {
         ctx.save();
-        ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-        ctx.fillRect(ARENA_PADDING, ARENA_PADDING, arenaW, arenaH);
-
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
         ctx.font = "bold 20px monospace, sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillStyle = "#e4e4e7";
-        ctx.shadowColor = "#000000";
-        ctx.shadowBlur = 10;
-        ctx.fillText("WAITING FOR HOST TO START MATCH (5 MINS)", LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2);
+        ctx.fillText("WAITING FOR HOST TO START ARENA BATTLE", VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT / 2);
         ctx.restore();
       }
 
-      // 16. Countdown Visual Overlay
+      // 13. Countdown Overlay
       if (currentPhase === "countdown") {
         ctx.save();
         ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-        ctx.fillRect(ARENA_PADDING, ARENA_PADDING, arenaW, arenaH);
-
+        ctx.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
         ctx.font = "bold 96px monospace, sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillStyle = "#facc15";
-        ctx.shadowColor = "#000000";
-        ctx.shadowBlur = 24;
-
         const count = countdownSecondsRef.current;
-        const text = count > 0 ? String(count) : "GO!";
-        ctx.fillText(text, LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2);
-
-        ctx.font = "bold 22px monospace, sans-serif";
-        ctx.fillStyle = "#ffffff";
-        ctx.shadowBlur = 6;
-        ctx.fillText("GET READY — BATTLE ROYALE", LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2 - 80);
+        ctx.fillText(count > 0 ? String(count) : "GO!", VIEWPORT_WIDTH / 2, VIEWPORT_HEIGHT / 2);
         ctx.restore();
       }
 
@@ -903,26 +801,27 @@ export default function GameCanvas({
     return () => {
       cancelAnimationFrame(rafId);
       window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup",   handleKeyUp);
-      window.removeEventListener("blur",    handleBlur);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+      canvas.removeEventListener("click", handleCanvasClick);
     };
-  }, []);
+  }, [handlePerformAttack, handlePerformDash, handlePerformShield, handlePerformShockwave]);
 
   return (
     <div className="relative w-full h-full flex items-center justify-center p-2 bg-zinc-950">
       <canvas
         ref={canvasRef}
-        width={LOGICAL_WIDTH}
-        height={LOGICAL_HEIGHT}
-        className="w-full h-auto max-w-[1200px] aspect-[1200/750] object-contain rounded-xl outline-none shadow-2xl border border-zinc-800/80 bg-zinc-900"
+        width={VIEWPORT_WIDTH}
+        height={VIEWPORT_HEIGHT}
+        className="w-full h-auto max-w-[960px] aspect-[960/600] object-contain rounded-xl outline-none shadow-2xl border border-zinc-800/80 bg-zinc-900 cursor-crosshair"
         tabIndex={0}
-        aria-label="Expanded Game arena"
+        aria-label="RoyalWar Arena Viewport"
       />
 
-      {/* Dynamic In-Arena Notification Toast */}
-      {skillNotification && (
-        <div className="absolute top-8 left-1/2 -translate-x-1/2 z-30 px-5 py-2.5 bg-zinc-950/90 border-2 border-amber-400 rounded-full text-amber-300 font-mono font-bold text-xs shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-          {skillNotification}
+      {/* Dynamic In-Arena Combat Notification Toast */}
+      {combatNotification && (
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 px-5 py-2 bg-zinc-950/90 border border-orange-500/80 rounded-full text-orange-300 font-mono font-bold text-xs shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          {combatNotification}
         </div>
       )}
     </div>

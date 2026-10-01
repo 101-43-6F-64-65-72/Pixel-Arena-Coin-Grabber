@@ -66,10 +66,24 @@
 - [x] Arena Mystery Skill Orbs (🎁): Pulsing mystery crates scattered across arena providing free random skill rolls on contact with 14s auto-respawn.
 - [x] Realtime Multiplayer Status FX Sync: Peer shockwaves, frozen ice cages, shield bubbles, and dash trails synchronized via Supabase Realtime Broadcast.
 
-## Phase 9: Vercel deployment.
+## Phase 10: RoyalWar Multiplayer Combat Arena, 2000x1200 World & Server-Validated Skills
+- [x] Deterministic Player Color Identity (`players.color_key`): Server-allocated palette (`orange`, `purple`, `blue`, `green`) across rooms, race-safe via advisory locks.
+- [x] Large World & Camera Viewport: `2000 x 1200` world with smooth player-following camera and boundary clamping.
+- [x] Authoritative PvP Combat & Basic Attack: `attack_player_safe` RPC dealing 20 HP damage within 90px range with shield blocking and kill tracking.
+- [x] Three Server-Validated Skills:
+  - ⚡ **Dash** (`use_dash_safe`): Server-validated 190px displacement (4s CD).
+  - 🛡️ **Shield** (`use_shield_safe`): 2.0s invulnerability barrier (8s CD).
+  - 💥 **Shockwave** (`use_shockwave_safe`): 170px area burst dealing 25 DMG to nearby enemies (7s CD).
+- [x] Authoritative HP, Death & Respawn: `hp`, `max_hp`, `alive`, `deaths`, `kills`, and `respawn_player_safe` RPC with 3s timer and spawn protection.
+- [x] Continuous / Infinite Coin Replenishment: Bounded active pool with instant location recycling upon collection.
+- [x] Multiplayer Realtime Sync & Combat FX: Melee slashes, floating damage numbers, shockwaves, shield spheres, and minimap radar.
+- [x] Upgraded Arena HUD: Health bar, Kills/Deaths counters, skill buttons with cooldowns, and color-coded leaderboard.
+
+## Phase 11: Vercel deployment.
 - [ ] Deploy project to Vercel.
 - [ ] Configure environment variables in Vercel.
 - [ ] Verify live functionality.
+
 
 
 
