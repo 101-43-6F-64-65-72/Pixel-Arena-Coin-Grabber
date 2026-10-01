@@ -3,77 +3,64 @@
 import { GameButton, GamePanel } from "@/components/GameUIComponents";
 
 /**
- * HomeScreen — entry point for Pixel Arena: Coin Grabber.
- * Polished with custom game asset UI buttons and panels.
+ * HomeScreen — Entry point for Pixel Arena.
+ *
+ * Design: flat dark panel, single amber accent, type-first hierarchy.
+ * No emoji decorations, no gradient blobs, no bouncing icons.
  */
 export default function HomeScreen({ onCreateRoom, onJoinRoom }) {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-zinc-950 px-4 relative overflow-hidden">
-      {/* Background Ambience Grid */}
+    <div className="min-h-screen flex flex-col items-center justify-center bg-[#0d0d0f] px-4">
+      {/* Subtle grid — functional texture, not decoration */}
       <div
-        className="absolute inset-0 opacity-15 pointer-events-none"
+        className="fixed inset-0 pointer-events-none opacity-[0.03]"
         style={{
-          backgroundImage: `
-            radial-gradient(circle at 50% 50%, rgba(245, 158, 11, 0.15) 0%, transparent 60%),
-            linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)
-          `,
-          backgroundSize: "100% 100%, 32px 32px, 32px 32px",
+          backgroundImage:
+            "linear-gradient(#e8e8ea 1px, transparent 1px), linear-gradient(90deg, #e8e8ea 1px, transparent 1px)",
+          backgroundSize: "40px 40px",
         }}
       />
 
-      <div className="relative z-10 w-full max-w-md flex flex-col items-center">
-        {/* Title Header with Game Trophy Emblem */}
-        <div className="mb-8 text-center flex flex-col items-center">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-b from-amber-400 to-amber-600 border-2 border-amber-300 flex items-center justify-center shadow-lg shadow-amber-950/80 mb-4 animate-bounce">
-            <span className="text-3xl">⚔️</span>
-          </div>
-
-          <p className="text-amber-400 text-xs font-mono tracking-[0.3em] uppercase mb-1 drop-shadow">
-            Multiplayer Arena
-          </p>
-          <h1 className="text-4xl sm:text-5xl font-black text-white tracking-tight leading-tight font-mono drop-shadow-md">
-            PIXEL ARENA
+      <div className="relative z-10 w-full max-w-xs flex flex-col gap-8">
+        {/* Title block */}
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-mono tracking-[0.25em] text-[#4a4a55] uppercase">
+            Multiplayer · Arena · 2–4 Players
+          </span>
+          <h1 className="text-4xl font-bold font-mono text-[#e8e8ea] leading-none tracking-tighter">
+            PIXEL<br />ARENA
           </h1>
-          <p className="text-orange-400 font-mono text-base tracking-widest font-bold mt-1">
-            COIN GRABBER & COMBAT
-          </p>
+          <div className="w-10 h-[2px] bg-[#f5a623] mt-2" />
         </div>
 
-        {/* Main Actions Panel */}
-        <GamePanel className="w-full">
-          <div className="flex flex-col gap-4">
-            <GameButton
-              id="btn-create-room"
-              onClick={onCreateRoom}
-              variant="orange"
-              size="lg"
-              icon="👑"
-              className="w-full text-base"
-            >
-              Create Room
-            </GameButton>
+        {/* Actions */}
+        <div className="flex flex-col gap-2">
+          <GameButton
+            id="btn-create-room"
+            onClick={onCreateRoom}
+            variant="primary"
+            size="lg"
+            className="w-full justify-center"
+          >
+            Create Room
+          </GameButton>
 
-            <GameButton
-              id="btn-join-room"
-              onClick={onJoinRoom}
-              variant="blue"
-              size="lg"
-              icon="🚪"
-              className="w-full text-base"
-            >
-              Join Room
-            </GameButton>
-          </div>
+          <GameButton
+            id="btn-join-room"
+            onClick={onJoinRoom}
+            variant="ghost"
+            size="lg"
+            className="w-full justify-center"
+          >
+            Join Room
+          </GameButton>
+        </div>
 
-          <div className="mt-6 pt-4 border-t border-zinc-800 text-center">
-            <p className="text-zinc-500 text-xs font-mono">
-              2–4 players · Realtime Battle · Infinite Coins · Sci-Fi Runner
-            </p>
-          </div>
-        </GamePanel>
+        {/* Footer info */}
+        <p className="text-[10px] text-[#4a4a55] font-mono text-center leading-relaxed">
+          Realtime · Competitive · Coin Grabber & Combat
+        </p>
       </div>
     </div>
   );
 }
-

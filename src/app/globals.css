@@ -1,26 +1,116 @@
 @import "tailwindcss";
 
+/* ── Game Design System ──────────────────────────────────────────────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Base palette */
+  --c-base:      #0d0d0f;
+  --c-surface:   #16161a;
+  --c-panel:     #1c1c21;
+  --c-border:    #2e2e35;
+  --c-border-hi: #46464f;
+
+  /* Text */
+  --c-text:      #e8e8ea;
+  --c-text-dim:  #7a7a85;
+  --c-text-mute: #4a4a55;
+
+  /* Accent — amber, single intentional accent */
+  --c-amber:     #f5a623;
+  --c-amber-dim: #7a4f0d;
+
+  /* Status */
+  --c-hp-hi:     #2ecc71;
+  --c-hp-mid:    #f39c12;
+  --c-hp-low:    #e74c3c;
+  --c-danger:    #c0392b;
+  --c-dead:      #6b0f0f;
+
+  /* Player team colors */
+  --c-orange:    #e8621a;
+  --c-purple:    #8b5cf6;
+  --c-blue:      #3b82f6;
+  --c-green:     #10b981;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Global reset */
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+html, body {
+  height: 100%;
+  background: var(--c-base);
+  color: var(--c-text);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Utility: HUD bracket clip ───────────────────────────────────────────── */
+.hud-clip {
+  clip-path: polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%);
+}
+
+.hud-clip-sm {
+  clip-path: polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%);
+}
+
+/* ── Ability slot: cooldown sweep ────────────────────────────────────────── */
+@keyframes cd-pulse {
+  0%, 100% { opacity: 0.9; }
+  50%       { opacity: 0.6; }
+}
+
+.cd-active { animation: cd-pulse 1s ease-in-out infinite; }
+
+/* ── HP bar damage flash ─────────────────────────────────────────────────── */
+@keyframes hit-flash {
+  0%   { opacity: 1; }
+  25%  { opacity: 0.2; }
+  75%  { opacity: 0.8; }
+  100% { opacity: 1; }
+}
+
+.hp-hit { animation: hit-flash 0.3s ease-out; }
+
+/* ── Score change bounce ─────────────────────────────────────────────────── */
+@keyframes score-bump {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.score-bump { animation: score-bump 0.25s ease-out; }
+
+/* ── Match-start / gameover transition ───────────────────────────────────── */
+@keyframes state-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.state-in { animation: state-in 0.25s ease-out forwards; }
+
+/* ── Countdown number ────────────────────────────────────────────────────── */
+@keyframes count-pop {
+  0%   { transform: scale(1.8); opacity: 0; }
+  30%  { transform: scale(1.0); opacity: 1; }
+  80%  { transform: scale(1.0); opacity: 1; }
+  100% { transform: scale(0.8); opacity: 0; }
+}
+
+.count-pop { animation: count-pop 0.9s ease-out forwards; }
+
+/* ── Gacha reel spin ─────────────────────────────────────────────────────── */
+@keyframes reel-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.reel-in { animation: reel-in 0.15s ease-out forwards; }
+
+/* ── Respawn reduced motion ──────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }

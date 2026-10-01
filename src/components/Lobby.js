@@ -1,12 +1,78 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import GameCanvas from "@/components/GameCanvas";
 import GameOver from "@/components/GameOver";
-import { GameButton, GamePanel } from "@/components/GameUIComponents";
+import { GameButton } from "@/components/GameUIComponents";
+import { HpBar } from "@/components/GameUIComponents";
 import { getPlayerPalette } from "@/lib/arena";
 
 const MAX_PLAYERS = 4;
+
+// ── Leaderboard row ────────────────────────────────────────────────────────
+function PlayerRow({ player, rank, isMe, isHost, isLeader, epochNow }) {
+  const palette = getPlayerPalette(player.color_key || "orange");
+  const alive = player.alive !== false;
+
+  return (
+    <li
+      className={`flex items-center gap-2 px-3 py-2 border-b border-[#2e2e35] last:border-0 ${
+        isMe ? "bg-[#1c1c14]" : "hover:bg-[#1c1c21]"
+      } transition-colors`}
+    >
+      {/* Rank number */}
+      <span
+        className="w-4 text-[10px] font-mono font-bold shrink-0 tabular-nums"
+        style={{
+          color:
+            rank === 1 ? "#f5a623"
+            : rank === 2 ? "#a0a0a8"
+            : rank === 3 ? "#c07e30"
+            : "#2e2e35",
+        }}
+      >
+        {rank}
+      </span>
+
+      {/* Color identity dot */}
+      <span
+        className="w-2 h-2 shrink-0"
+        style={{ background: palette.body }}
+      />
+
+      {/* Name + badges */}
+      <div className="flex-1 min-w-0">
+        <span
+          className={`text-xs font-mono font-semibold truncate block ${
+            isMe ? "text-[#f5a623]" : "text-[#e8e8ea]"
+          }`}
+        >
+          {player.nickname}
+          {isMe && <span className="text-[#4a4a55] font-normal ml-1">you</span>}
+          {isHost && (
+            <span className="ml-1 text-[9px] font-bold text-[#7a7a85] uppercase tracking-wider">
+              [host]
+            </span>
+          )}
+        </span>
+        <span
+          className="text-[10px] font-mono"
+          style={{ color: alive ? "#2ecc71" : "#e74c3c" }}
+        >
+          {alive ? `${player.hp ?? 100} HP` : "dead"} &nbsp;
+          <span className="text-[#4a4a55]">
+            {player.kills ?? 0}K / {player.deaths ?? 0}D
+          </span>
+        </span>
+      </div>
+
+      {/* Score — number-primary */}
+      <span className="text-sm font-mono font-bold tabular-nums text-[#e8e8ea] shrink-0">
+        {player.score ?? 0}
+      </span>
+    </li>
+  );
+}
 
 export default function Lobby({
   room,
@@ -17,7 +83,7 @@ export default function Lobby({
   isLeaving,
   onStartMatch,
   isStartingMatch,
-  matchState, // { phase, countdownSeconds, matchSecondsRemaining, isCollectiblesActive }
+  matchState,
 }) {
   const isHost = room?.host_id === currentPlayerId;
   const playerCount = players?.length ?? 0;
@@ -29,7 +95,7 @@ export default function Lobby({
   const matchRemaining = matchState?.matchSecondsRemaining ?? 300;
   const isCollectiblesActive = matchState?.isCollectiblesActive ?? false;
 
-  // ── Skill Cooldown State ──────────────────────────────────────────────────
+  // Skill cooldowns
   const [skillCooldowns, setSkillCooldowns] = useState({
     dash: 0,
     shield: 0,
@@ -39,28 +105,25 @@ export default function Lobby({
   useEffect(() => {
     const interval = setInterval(() => {
       setSkillCooldowns((prev) => {
-        let hasChanges = false;
+        let changed = false;
         const next = { ...prev };
-        for (const [key, val] of Object.entries(next)) {
-          if (val > 0) {
-            next[key] = Math.max(0, val - 0.1);
-            hasChanges = true;
+        for (const k of Object.keys(next)) {
+          if (next[k] > 0) {
+            next[k] = Math.max(0, next[k] - 0.1);
+            changed = true;
           }
         }
-        return hasChanges ? next : prev;
+        return changed ? next : prev;
       });
     }, 100);
     return () => clearInterval(interval);
   }, []);
 
-  const handleSkillCooldownUpdate = (skillKey, cooldownSecs) => {
-    setSkillCooldowns((prev) => ({
-      ...prev,
-      [skillKey]: cooldownSecs,
-    }));
-  };
+  const handleSkillCooldownUpdate = useCallback((skillKey, cooldownSecs) => {
+    setSkillCooldowns((prev) => ({ ...prev, [skillKey]: cooldownSecs }));
+  }, []);
 
-  // ── Render Game Over Screen ─────────────────────────────────────────────────
+  // Finished
   if (phase === "finished") {
     return (
       <GameOver
@@ -72,144 +135,110 @@ export default function Lobby({
     );
   }
 
-  // Format MM:SS for 5-minute match timer
+  // Timer
   const minutes = Math.floor(matchRemaining / 60);
   const seconds = matchRemaining % 60;
   const formattedTime = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  const isLowTime = phase === "playing" && matchRemaining <= 30;
 
-  // Live Sorted Leaderboard (Descending by score, then kills, then joined_at)
+  // Sorted leaderboard
   const sortedPlayers = [...players].sort((a, b) => {
-    const diff = (b.score ?? 0) - (a.score ?? 0);
-    if (diff !== 0) return diff;
-    const kDiff = (b.kills ?? 0) - (a.kills ?? 0);
-    if (kDiff !== 0) return kDiff;
+    const sd = (b.score ?? 0) - (a.score ?? 0);
+    if (sd !== 0) return sd;
+    const kd = (b.kills ?? 0) - (a.kills ?? 0);
+    if (kd !== 0) return kd;
     return new Date(a.joined_at) - new Date(b.joined_at);
   });
 
-  const myPalette = getPlayerPalette(currentPlayer?.color_key || "orange");
+  const highestScore = sortedPlayers[0]?.score ?? 0;
   const myHp = currentPlayer?.hp ?? 100;
-  const myHpPercent = Math.max(0, Math.min(100, myHp));
+  const myPalette = getPlayerPalette(currentPlayer?.color_key || "orange");
+  const epochNow = Date.now();
+
+  // Core skill cooldown definitions for the HUD dock
+  const coreCds = {
+    dash: skillCooldowns.dash,
+    shield: skillCooldowns.shield,
+    shockwave: skillCooldowns.shockwave,
+  };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col p-3 md:p-6 relative overflow-hidden">
-      {/* Background Ambience */}
-      <div
-        className="absolute inset-0 opacity-10 pointer-events-none"
-        style={{
-          backgroundImage: `
-            radial-gradient(circle at 50% 30%, rgba(245, 158, 11, 0.15) 0%, transparent 70%),
-            linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)
-          `,
-          backgroundSize: "100% 100%, 32px 32px, 32px 32px",
-        }}
-      />
+    <div className="min-h-screen bg-[#0d0d0f] text-[#e8e8ea] flex flex-col overflow-hidden">
 
-      {/* Header */}
-      <header className="relative z-10 max-w-7xl w-full mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-zinc-800/80 mb-4">
-        <div>
-          <h1 className="text-2xl font-bold font-mono tracking-tight text-white flex items-center gap-2">
-            <span
-              className={`w-3.5 h-3.5 rounded-full ${
-                phase === "playing"
-                  ? "bg-emerald-500 animate-pulse shadow-emerald-500/50 shadow-md"
-                  : phase === "countdown"
-                  ? "bg-yellow-400 animate-ping"
-                  : "bg-orange-500 animate-pulse"
-              }`}
-            />
-            RoyalWar: Sci-Fi Arena
-          </h1>
-          <p className="text-zinc-400 text-xs font-mono mt-0.5">
-            Move (<kbd className="px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700 text-amber-300">WASD / ARROWS</kbd>) • Attack (<kbd className="px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700 text-rose-400">CLICK / SPACE</kbd>) • Skills (<kbd className="px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700 text-sky-400">Q</kbd>, <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700 text-amber-400">E</kbd>, <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700 text-rose-400">R</kbd>)
-          </p>
+      {/* ── Top HUD bar ─────────────────────────────────────────────────── */}
+      <header className="flex items-center justify-between px-4 py-2 bg-[#16161a] border-b border-[#2e2e35] shrink-0">
+        {/* Left: Player identity + HP */}
+        <div className="flex items-center gap-3">
+          {/* Color swatch */}
+          <span
+            className="w-2.5 h-8 shrink-0"
+            style={{ background: myPalette.body }}
+          />
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-mono font-bold text-[#e8e8ea] leading-none">
+              {currentPlayer?.nickname ?? "—"}
+            </span>
+            <HpBar current={myHp} max={100} />
+          </div>
         </div>
 
-        {/* Room Code & Player Color Identity Badge */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 bg-zinc-900/90 px-3.5 py-2 rounded-xl border border-zinc-700/70 shadow-lg">
-            <span className={`w-3.5 h-3.5 rounded-full ${myPalette.dot}`} />
-            <span className={`text-xs font-bold font-mono uppercase ${myPalette.text}`}>
-              {myPalette.name}
-            </span>
-          </div>
+        {/* Center: Match clock */}
+        <div className="flex flex-col items-center">
+          <span
+            className={`text-2xl font-mono font-bold tabular-nums leading-none ${
+              isLowTime ? "text-[#e74c3c]" : "text-[#e8e8ea]"
+            }`}
+          >
+            {phase === "playing" ? formattedTime : "05:00"}
+          </span>
+          <span className="text-[9px] font-mono text-[#4a4a55] uppercase tracking-wider mt-0.5">
+            {phase === "waiting" ? "Waiting" : phase === "countdown" ? "Starting" : "Time"}
+          </span>
+        </div>
 
-          <div className="flex items-center gap-2.5 bg-zinc-900/90 px-4 py-2 rounded-xl border border-amber-600/50 shadow-lg">
-            <span className="text-zinc-400 text-xs font-mono uppercase tracking-wider">
-              Room:
+        {/* Right: Coins + Score + KD */}
+        <div className="flex items-center gap-4">
+          {/* Coins on map */}
+          <div className="flex flex-col items-end">
+            <span className="text-sm font-mono font-bold tabular-nums text-[#e8e8ea] leading-none">
+              {activeCoinCount}
             </span>
-            <span className="text-xl font-bold text-amber-400 font-mono tracking-widest">
+            <span className="text-[9px] font-mono text-[#4a4a55] uppercase">coins</span>
+          </div>
+          {/* Score */}
+          <div className="flex flex-col items-end">
+            <span className="text-sm font-mono font-bold tabular-nums text-[#f5a623] leading-none">
+              {currentPlayer?.score ?? 0}
+            </span>
+            <span className="text-[9px] font-mono text-[#4a4a55] uppercase">pts</span>
+          </div>
+          {/* K/D */}
+          <div className="flex flex-col items-end">
+            <span className="text-sm font-mono font-bold tabular-nums text-[#e8e8ea] leading-none">
+              {currentPlayer?.kills ?? 0}
+              <span className="text-[#4a4a55]"> / </span>
+              {currentPlayer?.deaths ?? 0}
+            </span>
+            <span className="text-[9px] font-mono text-[#4a4a55] uppercase">K / D</span>
+          </div>
+          {/* Room code */}
+          <div className="flex flex-col items-end ml-3 pl-3 border-l border-[#2e2e35]">
+            <span className="text-base font-mono font-bold tracking-[0.15em] text-[#f5a623] leading-none">
               {room?.code ?? "———"}
             </span>
+            <span className="text-[9px] font-mono text-[#4a4a55] uppercase">room</span>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="relative z-10 max-w-7xl w-full mx-auto flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
-        {/* Game Canvas Arena & Combat Dock */}
-        <div className="lg:col-span-3 bg-zinc-900/90 border-2 border-amber-950/80 rounded-3xl p-4 flex flex-col shadow-2xl backdrop-blur-md">
-          {/* Match Status & Health Bar HUD */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-3.5 mb-3 border-b border-zinc-800/80">
-            {/* Player Health Bar */}
-            <div className="flex items-center gap-2.5">
-              <span className="text-xs font-mono text-amber-400 uppercase font-bold">HP:</span>
-              <div className="w-36 sm:w-48 h-5 bg-zinc-950 rounded-xl overflow-hidden border-2 border-zinc-700 relative flex items-center justify-center shadow-inner">
-                <div
-                  className={`absolute left-0 top-0 bottom-0 transition-all duration-200 ${
-                    myHpPercent > 50
-                      ? "bg-gradient-to-r from-emerald-600 to-green-500"
-                      : myHpPercent > 25
-                      ? "bg-gradient-to-r from-yellow-600 to-amber-500"
-                      : "bg-gradient-to-r from-red-700 to-red-500"
-                  }`}
-                  style={{ width: `${myHpPercent}%` }}
-                />
-                <span className="relative z-10 text-[11px] font-mono font-bold text-white drop-shadow">
-                  {myHp} / 100
-                </span>
-              </div>
-            </div>
+      {/* ── Main: Arena + Sidebar ─────────────────────────────────────── */}
+      <main className="flex-1 flex overflow-hidden">
 
-            {/* Match Timer & Score & K/D Badges */}
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Timer Badge */}
-              <div
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 font-mono ${
-                  phase === "playing"
-                    ? matchRemaining <= 15
-                      ? "bg-red-950/90 border-red-500 text-red-300 animate-pulse shadow-red-900/50 shadow-md"
-                      : "bg-emerald-950/70 border-emerald-600/80 text-emerald-300 shadow-emerald-900/30 shadow-md"
-                    : "bg-zinc-900 border-zinc-700 text-zinc-400"
-                }`}
-              >
-                <span className="text-xs uppercase text-zinc-400 font-semibold">TIME:</span>
-                <strong className="text-base font-bold tracking-wider">
-                  {phase === "playing" ? formattedTime : "05:00"}
-                </strong>
-              </div>
+        {/* Canvas column */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
-              {/* Coins remaining badge */}
-              <div className="flex items-center gap-1.5 bg-yellow-950/60 border-2 border-yellow-600/70 px-3 py-1.5 rounded-xl shadow-sm">
-                <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 animate-pulse" />
-                <span className="text-xs font-mono text-yellow-300">
-                  Coins: <strong className="text-yellow-100 font-bold">{activeCoinCount}</strong>
-                </span>
-              </div>
-
-              {/* Player Score & K/D */}
-              <div className="flex items-center gap-2 bg-zinc-800/90 border-2 border-zinc-700 px-3 py-1.5 rounded-xl shadow-sm font-mono text-xs">
-                <span className="text-yellow-400 font-bold">{currentPlayer?.score ?? 0} pts</span>
-                <span className="text-zinc-500">•</span>
-                <span className="text-emerald-400 font-semibold">{currentPlayer?.kills ?? 0} K</span>
-                <span className="text-zinc-500">•</span>
-                <span className="text-red-400 font-semibold">{currentPlayer?.deaths ?? 0} D</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Interactive Canvas Viewport Container */}
-          <div className="w-full flex items-center justify-center rounded-2xl overflow-hidden bg-zinc-950/95 border-2 border-zinc-800 p-1 shadow-inner">
+          {/* Game Canvas — focal point */}
+          <div className="flex-1 flex items-center justify-center bg-[#0d0d0f] min-h-0">
             <GameCanvas
               roomId={room?.id}
               currentPlayerId={currentPlayerId}
@@ -218,223 +247,148 @@ export default function Lobby({
               matchPhase={phase}
               countdownSeconds={countdown}
               isCollectiblesActive={isCollectiblesActive}
-              skillCooldowns={skillCooldowns}
+              skillCooldowns={coreCds}
               onSkillCooldownUpdate={handleSkillCooldownUpdate}
             />
           </div>
 
-          {/* Three Server-Validated Skills Dock */}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-zinc-800/80">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono text-amber-400 uppercase tracking-wider font-bold">
-                COMBAT SKILLS:
-              </span>
-            </div>
+          {/* ── Ability Dock ──────────────────────────────────────────── */}
+          <div className="shrink-0 flex items-center gap-1 bg-[#16161a] border-t border-[#2e2e35] px-3 py-2">
+            {/* Fixed combat abilities */}
+            {[
+              { id: "attack",    label: "ATK",  hotkey: "SPC", cd: 0,                       maxCd: 1, color: "#e74c3c" },
+              { id: "dash",      label: "DASH", hotkey: "Q",   cd: coreCds.dash,             maxCd: 4, color: "#3b82f6" },
+              { id: "shield",    label: "SHLD", hotkey: "E",   cd: coreCds.shield,           maxCd: 8, color: "#f5a623" },
+              { id: "shockwave", label: "WAVE", hotkey: "R",   cd: coreCds.shockwave,        maxCd: 7, color: "#10b981" },
+            ].map((s) => {
+              const isOnCd = s.cd > 0;
+              const cdPct = s.maxCd > 0 ? Math.max(0, Math.min(1, s.cd / s.maxCd)) : 0;
+              const canUse = phase === "playing" && currentPlayer?.alive && !isOnCd;
 
-            <div className="flex items-center gap-3">
-              {/* Basic Attack Button */}
-              <div className="flex flex-col items-center">
-                <button
-                  disabled={phase !== "playing" || !currentPlayer?.alive}
-                  title="Melee Attack (Click / Space): Deal 20 DMG to nearest enemy in 90px range"
-                  className="relative w-16 h-16 rounded-2xl border-2 border-rose-400 bg-gradient-to-b from-rose-500 via-red-600 to-red-800 text-white font-mono flex flex-col items-center justify-center shadow-lg shadow-red-950/80 transition-all active:translate-y-1 disabled:opacity-40 cursor-pointer overflow-hidden"
+              return (
+                <div
+                  key={s.id}
+                  className="relative flex flex-col items-center justify-between w-14 h-14 p-1.5 border font-mono select-none"
+                  style={{
+                    clipPath: "polygon(6px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 6px)",
+                    background: isOnCd ? "#16161a" : "#1c1c21",
+                    borderColor: isOnCd ? "#2e2e35" : "#46464f",
+                    opacity: canUse || !isOnCd ? 1 : 0.5,
+                  }}
+                  title={`${s.label} [${s.hotkey}]`}
                 >
-                  <span className="absolute top-1 left-2 right-2 h-1/3 bg-white/25 rounded-t-xl pointer-events-none" />
-                  <span className="text-lg relative z-10">⚔️</span>
-                  <span className="text-[10px] font-bold uppercase relative z-10 leading-none">ATTACK</span>
-                  <span className="text-[8px] text-rose-200 font-bold relative z-10">[SPACE]</span>
-                </button>
-              </div>
-
-              {/* Skill 1: Dash */}
-              <div className="flex flex-col items-center relative">
-                <button
-                  disabled={phase !== "playing" || !currentPlayer?.alive || skillCooldowns.dash > 0}
-                  title="Hyper Dash [Q]: Quick 190px burst in movement direction (4s CD)"
-                  className="relative w-16 h-16 rounded-2xl border-2 border-sky-300 bg-gradient-to-b from-sky-400 via-blue-500 to-blue-700 text-white font-mono flex flex-col items-center justify-center shadow-lg shadow-blue-950/80 transition-all active:translate-y-1 disabled:opacity-40 cursor-pointer overflow-hidden"
-                >
-                  <span className="absolute top-1 left-2 right-2 h-1/3 bg-white/25 rounded-t-xl pointer-events-none" />
-                  {skillCooldowns.dash > 0 && (
-                    <div className="absolute inset-0 bg-black/85 flex items-center justify-center z-20">
-                      <span className="text-xs font-bold text-amber-300">{skillCooldowns.dash.toFixed(1)}s</span>
+                  {/* CD overlay */}
+                  {isOnCd && (
+                    <div
+                      className="absolute inset-0 bg-black/65 flex items-center justify-center cd-active"
+                      style={{ zIndex: 10 }}
+                    >
+                      <span className="text-[11px] font-bold text-[#f5a623] tabular-nums">
+                        {s.cd.toFixed(1)}
+                      </span>
                     </div>
                   )}
-                  <span className="text-lg relative z-10">⚡</span>
-                  <span className="text-[10px] font-bold uppercase relative z-10 leading-none">DASH</span>
-                  <span className="text-[8px] text-sky-200 font-bold relative z-10">[Q]</span>
-                </button>
-              </div>
-
-              {/* Skill 2: Shield */}
-              <div className="flex flex-col items-center relative">
-                <button
-                  disabled={phase !== "playing" || !currentPlayer?.alive || skillCooldowns.shield > 0}
-                  title="Aegis Shield [E]: 2.0s barrier blocking all attacks & shockwaves (8s CD)"
-                  className="relative w-16 h-16 rounded-2xl border-2 border-amber-300 bg-gradient-to-b from-amber-400 via-orange-500 to-orange-700 text-amber-950 font-mono flex flex-col items-center justify-center shadow-lg shadow-amber-950/80 transition-all active:translate-y-1 disabled:opacity-40 cursor-pointer overflow-hidden"
-                >
-                  <span className="absolute top-1 left-2 right-2 h-1/3 bg-white/25 rounded-t-xl pointer-events-none" />
-                  {skillCooldowns.shield > 0 && (
-                    <div className="absolute inset-0 bg-black/85 flex items-center justify-center z-20">
-                      <span className="text-xs font-bold text-amber-300">{skillCooldowns.shield.toFixed(1)}s</span>
+                  {/* CD progress */}
+                  {isOnCd && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2e2e35]">
+                      <div
+                        className="h-full"
+                        style={{ width: `${(1 - cdPct) * 100}%`, background: s.color }}
+                      />
                     </div>
                   )}
-                  <span className="text-lg relative z-10">🛡️</span>
-                  <span className="text-[10px] font-bold uppercase relative z-10 leading-none">SHIELD</span>
-                  <span className="text-[8px] text-amber-900 font-bold relative z-10">[E]</span>
-                </button>
-              </div>
-
-              {/* Skill 3: Shockwave */}
-              <div className="flex flex-col items-center relative">
-                <button
-                  disabled={phase !== "playing" || !currentPlayer?.alive || skillCooldowns.shockwave > 0}
-                  title="Shockwave [R]: Area explosion hitting all enemies in 170px for 25 DMG (7s CD)"
-                  className="relative w-16 h-16 rounded-2xl border-2 border-emerald-300 bg-gradient-to-b from-emerald-400 via-green-500 to-green-700 text-emerald-950 font-mono flex flex-col items-center justify-center shadow-lg shadow-emerald-950/80 transition-all active:translate-y-1 disabled:opacity-40 cursor-pointer overflow-hidden"
-                >
-                  <span className="absolute top-1 left-2 right-2 h-1/3 bg-white/25 rounded-t-xl pointer-events-none" />
-                  {skillCooldowns.shockwave > 0 && (
-                    <div className="absolute inset-0 bg-black/85 flex items-center justify-center z-20">
-                      <span className="text-xs font-bold text-amber-300">{skillCooldowns.shockwave.toFixed(1)}s</span>
-                    </div>
+                  {/* Active top strip */}
+                  {!isOnCd && (
+                    <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: s.color }} />
                   )}
-                  <span className="text-lg relative z-10">💥</span>
-                  <span className="text-[10px] font-bold uppercase relative z-10 leading-none">BURST</span>
-                  <span className="text-[8px] text-emerald-900 font-bold relative z-10">[R]</span>
-                </button>
-              </div>
+                  <span className="text-[8px] font-bold self-start text-[#4a4a55]">{s.hotkey}</span>
+                  <span
+                    className="text-[9px] font-bold uppercase tracking-tight self-end text-center w-full"
+                    style={{ color: isOnCd ? "#4a4a55" : "#e8e8ea" }}
+                  >
+                    {s.label}
+                  </span>
+                </div>
+              );
+            })}
+
+            {/* Separator */}
+            <div className="w-px h-10 bg-[#2e2e35] mx-1" />
+
+            {/* Key guide */}
+            <div className="ml-1 flex flex-col gap-1">
+              <span className="text-[9px] font-mono text-[#4a4a55]">Move: WASD / Arrows</span>
+              <span className="text-[9px] font-mono text-[#4a4a55]">Attack: Click / Space</span>
             </div>
           </div>
         </div>
 
-        {/* Sidebar: Live Leaderboard & Controls */}
-        <div className="flex flex-col gap-4">
-          {/* Live Leaderboard Card */}
-          <div className="bg-zinc-900/90 border-2 border-amber-950/80 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-md">
-            <div className="px-4 py-3.5 border-b border-zinc-800 flex items-center justify-between bg-zinc-900">
-              <span className="text-amber-400 text-xs font-mono tracking-widest uppercase font-bold flex items-center gap-1.5">
-                🏆 ARENA LEADERBOARD
-              </span>
-              <span className="text-zinc-400 text-xs font-mono">
-                <span className="text-white font-bold">{playerCount}</span>
-                <span className="text-zinc-500"> / {MAX_PLAYERS}</span>
-              </span>
-            </div>
+        {/* ── Sidebar ─────────────────────────────────────────────────── */}
+        <aside className="w-48 shrink-0 flex flex-col border-l border-[#2e2e35] bg-[#16161a]">
 
-            <ul className="divide-y divide-zinc-800/80">
-              {sortedPlayers && sortedPlayers.length > 0 ? (
-                sortedPlayers.map((player, index) => {
-                  const isRoomHost = player.id === room?.host_id;
-                  const isMe = player.id === currentPlayerId;
-                  const isLeader = index === 0 && (player.score ?? 0) > 0;
-                  const pPalette = getPlayerPalette(player.color_key || "orange");
-
-                  return (
-                    <li
-                      key={player.id}
-                      className={`px-4 py-3.5 flex items-center gap-3 transition-colors ${
-                        isLeader ? "bg-amber-950/30" : "hover:bg-zinc-800/30"
-                      }`}
-                    >
-                      {/* Rank Icon */}
-                      <span
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-mono font-bold shrink-0 shadow-sm ${
-                          index === 0
-                            ? "bg-gradient-to-b from-amber-300 to-amber-500 text-amber-950"
-                            : index === 1
-                            ? "bg-zinc-400 text-zinc-950"
-                            : index === 2
-                            ? "bg-amber-800 text-white"
-                            : "bg-zinc-800 text-zinc-400"
-                        }`}
-                      >
-                        {index === 0 ? "👑" : index + 1}
-                      </span>
-
-                      {/* Deterministic Color Dot */}
-                      <span className={`w-3 h-3 rounded-full shrink-0 ${pPalette.dot}`} />
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className={`text-sm font-semibold truncate ${isMe ? "text-amber-300 font-bold" : "text-zinc-200"}`}>
-                            {player.nickname}
-                          </span>
-                          {isMe && (
-                            <span className="text-amber-400 text-xs font-mono shrink-0 font-medium">(you)</span>
-                          )}
-                          {isRoomHost && (
-                            <span className="text-amber-300 text-[10px] font-mono font-bold tracking-wide bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-700/80 shrink-0">
-                              HOST
-                            </span>
-                          )}
-                        </div>
-
-                        {/* HP & K/D Status */}
-                        <div className="flex items-center gap-2 mt-0.5 text-[11px] font-mono text-zinc-400">
-                          <span className={player.alive ? "text-emerald-400" : "text-red-400 font-bold"}>
-                            {player.alive ? `${player.hp ?? 100} HP` : "DEAD"}
-                          </span>
-                          <span>•</span>
-                          <span>{player.kills ?? 0}K / {player.deaths ?? 0}D</span>
-                        </div>
-                      </div>
-
-                      {/* Score Badge */}
-                      <div className="bg-zinc-950 px-2.5 py-1 rounded-xl border border-zinc-700 flex items-center gap-1 shadow-inner">
-                        <span className="text-sm font-bold font-mono text-yellow-400">
-                          {player.score ?? 0}
-                        </span>
-                        <span className="text-[10px] font-mono text-zinc-400 uppercase">pts</span>
-                      </div>
-                    </li>
-                  );
-                })
-              ) : (
-                <li className="px-4 py-6 text-center text-zinc-500 text-sm font-mono">
-                  Waiting for players…
-                </li>
-              )}
-            </ul>
+          {/* Leaderboard header */}
+          <div className="px-3 py-2 border-b border-[#2e2e35] flex items-center justify-between">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#f5a623]">
+              Rankings
+            </span>
+            <span className="text-[10px] font-mono text-[#4a4a55]">
+              {playerCount}/{MAX_PLAYERS}
+            </span>
           </div>
 
-          {/* Action Buttons */}
-          <div className="space-y-3 pt-1">
-            {/* Start Match Button */}
+          {/* Leaderboard rows */}
+          <ul className="flex-1 overflow-y-auto">
+            {sortedPlayers.length > 0 ? (
+              sortedPlayers.map((player, index) => (
+                <PlayerRow
+                  key={player.id}
+                  player={player}
+                  rank={index + 1}
+                  isMe={player.id === currentPlayerId}
+                  isHost={player.id === room?.host_id}
+                  isLeader={index === 0 && highestScore > 0}
+                  epochNow={epochNow}
+                />
+              ))
+            ) : (
+              <li className="px-3 py-4 text-[11px] font-mono text-[#4a4a55]">
+                Waiting for players…
+              </li>
+            )}
+          </ul>
+
+          {/* Action buttons */}
+          <div className="p-3 border-t border-[#2e2e35] flex flex-col gap-2">
             {isHost && phase === "waiting" && (
               <GameButton
                 id="btn-start-game"
                 onClick={onStartMatch}
                 disabled={isStartingMatch}
-                variant="orange"
-                size="lg"
-                className="w-full"
+                variant="primary"
+                size="md"
+                className="w-full justify-center"
               >
-                {isStartingMatch ? "Starting Battle…" : "START ARENA BATTLE"}
+                {isStartingMatch ? "Starting…" : "Start Battle"}
               </GameButton>
             )}
-
             {phase === "waiting" && !isHost && (
-              <div className="p-4 bg-zinc-900/80 border-2 border-zinc-800 rounded-2xl text-center">
-                <p className="text-xs font-mono text-zinc-400">
-                  Waiting for host to start arena battle…
-                </p>
-              </div>
+              <p className="text-[10px] font-mono text-[#4a4a55] text-center leading-snug">
+                Waiting for host to start the match.
+              </p>
             )}
-
-            {/* Leave Room Button */}
             <GameButton
               id="btn-leave-room"
               onClick={onLeave}
               disabled={isLeaving}
-              variant="dark"
-              size="md"
-              className="w-full"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-center"
             >
-              {isLeaving ? "Leaving…" : "Leave Room"}
+              {isLeaving ? "Leaving…" : "Leave"}
             </GameButton>
           </div>
-        </div>
+        </aside>
       </main>
     </div>
   );
 }
-

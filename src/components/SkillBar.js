@@ -2,15 +2,22 @@
 
 import { useState } from "react";
 import { SKILL_CATALOG, GACHA_COST, rollGachaSkill } from "@/lib/skills";
+import { AbilityButton, GameButton } from "@/components/GameUIComponents";
 
 /**
- * SkillBar & Gacha Component:
- * Displays active skill slots, cooldowns, hotkeys, and the Skill Gacha Roller.
+ * SkillBar — redesigned as a proper game ability dock.
+ *
+ * Design principles:
+ *   - Ability slots look like HUD keys, not website buttons
+ *   - Cooldown shown as bottom progress bar + time text, not "opacity:60"
+ *   - Gacha trigger is compact, not a giant gradient button
+ *   - No emoji as primary UI elements (label text only)
+ *   - No rounded-2xl / glassmorphism on the dock
  */
 export default function SkillBar({
   equippedSkills = { primary: null, secondary: null },
-  skillCooldowns = {}, // { [skillId]: remainingSeconds }
-  activeSkillEffects = {}, // { [skillId]: remainingDuration }
+  skillCooldowns = {},
+  activeSkillEffects = {},
   playerScore = 0,
   onActivateSkill,
   onEquipSkill,
@@ -20,34 +27,25 @@ export default function SkillBar({
   const [isGachaOpen, setIsGachaOpen] = useState(false);
   const [isRolling, setIsRolling] = useState(false);
   const [rolledSkill, setRolledSkill] = useState(null);
-  const [selectedSlotToReplace, setSelectedSlotToReplace] = useState("primary");
 
   const canAffordGacha = playerScore >= GACHA_COST;
 
   const handleStartRoll = () => {
     if (!canAffordGacha || isRolling) return;
-
-    // Deduct coins if callback provided
     if (onSpendCoinsForGacha) {
       const success = onSpendCoinsForGacha(GACHA_COST);
       if (!success) return;
     }
-
     setIsRolling(true);
     setRolledSkill(null);
-
-    // Roll animation delay
     let rollCount = 0;
     const skillsList = Object.values(SKILL_CATALOG);
     const interval = setInterval(() => {
       rollCount++;
-      const tempSkill = skillsList[Math.floor(Math.random() * skillsList.length)];
-      setRolledSkill(tempSkill);
-
+      setRolledSkill(skillsList[Math.floor(Math.random() * skillsList.length)]);
       if (rollCount > 14) {
         clearInterval(interval);
-        const finalSkill = rollGachaSkill(equippedSkills.primary?.id);
-        setRolledSkill(finalSkill);
+        setRolledSkill(rollGachaSkill(equippedSkills.primary?.id));
         setIsRolling(false);
       }
     }, 90);
@@ -60,211 +58,254 @@ export default function SkillBar({
     setIsGachaOpen(false);
   };
 
-  const renderSlot = (slotKey, skill, defaultKey) => {
+  const renderSlot = (slotKey, skill, hotkey, label) => {
     if (!skill) {
       return (
         <button
           onClick={() => setIsGachaOpen(true)}
           disabled={disabled}
-          className="group relative flex flex-col items-center justify-center w-20 h-20 bg-zinc-900/90 hover:bg-zinc-800/80 border-2 border-dashed border-zinc-700 hover:border-orange-500/80 rounded-2xl transition-all cursor-pointer shadow-lg active:scale-95 disabled:opacity-40"
+          title={`${label}: Empty — click to roll a skill`}
+          className="relative flex flex-col items-center justify-center w-14 h-14 border border-dashed border-[#2e2e35] bg-[#16161a] transition-colors hover:border-[#46464f] disabled:opacity-30 cursor-pointer"
+          style={{ clipPath: "polygon(6px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 6px)" }}
         >
-          <span className="text-xl group-hover:scale-110 transition-transform">➕</span>
-          <span className="text-[10px] font-mono text-zinc-400 mt-1 uppercase">Empty</span>
-          <span className="text-[9px] font-mono text-zinc-500 font-bold">[{defaultKey}]</span>
+          <span className="text-[8px] font-mono font-bold text-[#2e2e35] uppercase tracking-wider self-start pl-1.5 pt-0.5">
+            {hotkey}
+          </span>
+          <span className="text-[10px] font-mono text-[#4a4a55] uppercase tracking-wider self-end pr-1.5 pb-0.5">
+            Empty
+          </span>
         </button>
       );
     }
 
     const cdRemaining = skillCooldowns[skill.id] || 0;
-    const isOnCd = cdRemaining > 0;
-    const activeRemaining = activeSkillEffects[skill.id] || 0;
-    const isActive = activeRemaining > 0;
+    const maxCd = skill.cooldown || 1;
+    const isActive = (activeSkillEffects[skill.id] || 0) > 0;
 
     return (
-      <button
+      <AbilityButton
+        id={`skill-${slotKey}`}
+        label={skill.name}
+        hotkey={skill.keyDisplay}
+        disabled={disabled}
+        cooldown={cdRemaining}
+        maxCooldown={maxCd}
+        active={isActive}
         onClick={() => onActivateSkill(skill.id)}
-        disabled={disabled || isOnCd}
-        title={`${skill.name} (${skill.keyDisplay}): ${skill.description}`}
-        className={`group relative flex flex-col items-center justify-between p-2 w-20 h-20 rounded-2xl border-2 transition-all cursor-pointer shadow-xl select-none ${
-          isActive
-            ? "border-emerald-400 bg-emerald-950/80 shadow-emerald-500/40 shadow-lg scale-105"
-            : isOnCd
-            ? "border-zinc-800 bg-zinc-900/70 opacity-60 cursor-not-allowed"
-            : `${skill.tier.border} ${skill.tier.bg} hover:scale-105 active:scale-95 hover:shadow-orange-500/20`
-        }`}
-      >
-        {/* Active Glow Ring */}
-        {isActive && (
-          <span className="absolute inset-0 rounded-2xl border-2 border-emerald-400 animate-ping opacity-50" />
-        )}
-
-        {/* Cooldown Overlay */}
-        {isOnCd && (
-          <div className="absolute inset-0 rounded-2xl bg-black/75 flex flex-col items-center justify-center z-10">
-            <span className="text-sm font-bold font-mono text-white">
-              {cdRemaining.toFixed(1)}s
-            </span>
-          </div>
-        )}
-
-        {/* Skill Icon & Keybadge */}
-        <div className="w-full flex items-center justify-between">
-          <span className="text-2xl drop-shadow">{skill.icon}</span>
-          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-zinc-900/90 text-zinc-300 border border-zinc-700">
-            {skill.keyDisplay}
-          </span>
-        </div>
-
-        {/* Skill Name */}
-        <div className="w-full text-center truncate">
-          <span className="text-[11px] font-bold font-mono text-white tracking-tight truncate block">
-            {skill.name}
-          </span>
-          <span className="text-[8px] font-mono uppercase text-zinc-400">
-            {skill.tier.name}
-          </span>
-        </div>
-      </button>
+        accentColor={
+          skill.tier?.name === "Legendary" ? "#f5c518"
+          : skill.tier?.name === "Rare" ? "#8b5cf6"
+          : "#f5a623"
+        }
+      />
     );
   };
 
+  // ── Core skill slots (fixed: attack, dash, shield, shockwave) ─────────────
+  const coreSkills = [
+    {
+      id: "attack",
+      label: "ATK",
+      hotkey: "SPC",
+      cd: 0,
+      maxCd: 1,
+      accent: "#e74c3c",
+      active: false,
+      disabled: false,
+    },
+    {
+      id: "dash",
+      label: "DASH",
+      hotkey: "Q",
+      cd: skillCooldowns.dash || 0,
+      maxCd: 4,
+      accent: "#3b82f6",
+      active: false,
+      disabled: false,
+    },
+    {
+      id: "shield",
+      label: "SHLD",
+      hotkey: "E",
+      cd: skillCooldowns.shield || 0,
+      maxCd: 8,
+      accent: "#f5a623",
+      active: false,
+      disabled: false,
+    },
+    {
+      id: "shockwave",
+      label: "WAVE",
+      hotkey: "R",
+      cd: skillCooldowns.shockwave || 0,
+      maxCd: 7,
+      accent: "#10b981",
+      active: false,
+      disabled: false,
+    },
+  ];
+
   return (
     <>
-      {/* HUD Bottom Skill Dock */}
-      <div className="flex items-center gap-3 bg-zinc-950/90 p-2.5 rounded-2xl border border-zinc-800/90 shadow-2xl backdrop-blur-md">
-        {/* Slot 1: Primary Skill */}
-        <div className="flex flex-col items-center">
-          {renderSlot("primary", equippedSkills.primary, "SPACE")}
-          <span className="text-[9px] font-mono text-zinc-400 mt-1 uppercase tracking-wider font-semibold">
-            SLOT 1
-          </span>
+      {/* ── Ability Dock ───────────────────────────────────────────────── */}
+      <div className="flex items-center gap-1 bg-[#16161a] border-t border-[#2e2e35] px-3 py-2">
+        {/* Fixed combat skills */}
+        <div className="flex items-center gap-1">
+          {coreSkills.map((s) => (
+            <AbilityButton
+              key={s.id}
+              id={`ability-${s.id}`}
+              label={s.label}
+              hotkey={s.hotkey}
+              disabled={disabled || s.disabled}
+              cooldown={s.cd}
+              maxCooldown={s.maxCd}
+              active={s.active}
+              accentColor={s.accent}
+              onClick={() => {
+                /* no-op: hotkey in GameCanvas handles real dispatch */
+              }}
+            />
+          ))}
         </div>
 
-        {/* Slot 2: Secondary Skill */}
-        <div className="flex flex-col items-center">
-          {renderSlot("secondary", equippedSkills.secondary, "Q")}
-          <span className="text-[9px] font-mono text-zinc-400 mt-1 uppercase tracking-wider font-semibold">
-            SLOT 2
-          </span>
+        {/* Separator */}
+        <div className="w-px h-10 bg-[#2e2e35] mx-2" />
+
+        {/* Gacha skill slots */}
+        <div className="flex items-center gap-1">
+          {renderSlot("primary", equippedSkills.primary, "1", "Slot 1")}
+          {renderSlot("secondary", equippedSkills.secondary, "2", "Slot 2")}
         </div>
 
-        {/* Gacha Roller Launcher Button */}
-        <div className="h-16 w-px bg-zinc-800/80 mx-1" />
+        {/* Separator */}
+        <div className="w-px h-10 bg-[#2e2e35] mx-2" />
 
+        {/* Gacha trigger */}
         <button
           id="btn-open-gacha"
           onClick={() => setIsGachaOpen(true)}
           disabled={disabled}
-          className="flex flex-col items-center justify-center px-4 h-20 bg-gradient-to-br from-amber-600/90 to-orange-700 hover:from-amber-500 hover:to-orange-600 active:scale-95 text-white font-mono rounded-2xl border-2 border-amber-400/80 transition-all shadow-lg shadow-amber-950/50 cursor-pointer disabled:opacity-50"
+          className="flex flex-col items-center justify-center px-3 h-14 bg-[#1c1c21] border border-[#2e2e35] hover:border-[#f5a623] transition-colors disabled:opacity-30 cursor-pointer"
+          style={{ clipPath: "polygon(6px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 6px)" }}
         >
-          <span className="text-2xl animate-bounce">🎰</span>
-          <span className="text-xs font-bold uppercase tracking-wider mt-0.5">
-            SKILL GACHA
+          <span className="text-[10px] font-mono font-bold text-[#f5a623] uppercase tracking-wider">
+            GACHA
           </span>
-          <span className="text-[9px] text-amber-200 font-semibold">
-            Cost: {GACHA_COST} Coins
+          <span className="text-[9px] font-mono text-[#4a4a55]">
+            {GACHA_COST} pts
           </span>
         </button>
       </div>
 
-      {/* ─── SKILL GACHA MODAL ──────────────────────────────────────────────── */}
+      {/* ── Gacha Modal ─────────────────────────────────────────────────── */}
       {isGachaOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
-          <div className="max-w-md w-full bg-zinc-900 border-2 border-amber-500/80 rounded-3xl p-6 shadow-2xl relative flex flex-col items-center text-center">
-            {/* Close Button */}
-            <button
-              onClick={() => {
-                if (!isRolling) setIsGachaOpen(false);
-              }}
-              disabled={isRolling}
-              className="absolute top-4 right-4 text-zinc-400 hover:text-white text-xl p-2 rounded-full hover:bg-zinc-800 cursor-pointer transition-colors"
-            >
-              ✕
-            </button>
-
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+          <div className="w-full max-w-sm bg-[#1c1c21] border border-[#2e2e35] relative">
             {/* Header */}
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-3xl">🎰</span>
-              <h2 className="text-2xl font-bold font-mono text-amber-400 tracking-tight">
-                LUCKY SKILL GACHA
-              </h2>
-            </div>
-            <p className="text-xs font-mono text-zinc-400 mb-6">
-              Spin to unlock game-changing battle skills! (Cost: {GACHA_COST} pts)
-            </p>
-
-            {/* Gacha Reel Display */}
-            <div className="w-full h-44 bg-zinc-950 border-2 border-zinc-800 rounded-2xl flex flex-col items-center justify-center p-4 relative overflow-hidden shadow-inner mb-6">
-              {rolledSkill ? (
-                <div className={`flex flex-col items-center animate-in zoom-in-90 duration-300 ${rolledSkill.tier.color}`}>
-                  <span className="text-5xl mb-2 drop-shadow-md">{rolledSkill.icon}</span>
-                  <strong className="text-lg font-bold font-mono text-white tracking-wide">
-                    {rolledSkill.name}
-                  </strong>
-                  <span className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border ${rolledSkill.tier.border} ${rolledSkill.tier.bg} text-white mt-1`}>
-                    {rolledSkill.tier.name}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-[#2e2e35]">
+              <div>
+                <h2 className="text-sm font-mono font-bold uppercase tracking-[0.15em] text-[#f5a623]">
+                  Skill Gacha
+                </h2>
+                <p className="text-[10px] font-mono text-[#4a4a55] mt-0.5">
+                  Cost: {GACHA_COST} pts — Balance:{" "}
+                  <span
+                    className="font-bold"
+                    style={{ color: canAffordGacha ? "#f5a623" : "#e74c3c" }}
+                  >
+                    {playerScore}
                   </span>
-                  <p className="text-xs font-mono text-zinc-300 mt-2 max-w-xs text-center">
+                </p>
+              </div>
+              <button
+                onClick={() => { if (!isRolling) setIsGachaOpen(false); }}
+                disabled={isRolling}
+                className="text-[#4a4a55] hover:text-[#e8e8ea] text-lg font-mono cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Reel display */}
+            <div className="px-5 py-6 flex flex-col items-center min-h-[140px] justify-center border-b border-[#2e2e35] bg-[#16161a]">
+              {rolledSkill ? (
+                <div className="flex flex-col items-center gap-2 reel-in text-center">
+                  <span className="text-3xl leading-none">{rolledSkill.icon}</span>
+                  <div>
+                    <strong className="block text-sm font-mono font-bold text-[#e8e8ea] tracking-wide">
+                      {rolledSkill.name}
+                    </strong>
+                    <span
+                      className="text-[9px] font-mono uppercase tracking-[0.15em] font-bold"
+                      style={{
+                        color:
+                          rolledSkill.tier?.name === "Legendary" ? "#f5c518"
+                          : rolledSkill.tier?.name === "Rare" ? "#8b5cf6"
+                          : "#7a7a85",
+                      }}
+                    >
+                      {rolledSkill.tier?.name}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-mono text-[#7a7a85] max-w-[200px] leading-snug">
                     {rolledSkill.description}
                   </p>
                 </div>
               ) : (
-                <div className="flex flex-col items-center text-zinc-500 font-mono">
-                  <span className="text-4xl mb-2 opacity-60">❓</span>
-                  <span className="text-sm font-semibold">Press Spin to Reveal Skill</span>
-                  <span className="text-[11px] text-zinc-600 mt-1">
-                    Common (60%) • Rare (35%) • Legendary (10%)
-                  </span>
+                <div className="flex flex-col items-center text-[#4a4a55] font-mono gap-1">
+                  <span className="text-2xl opacity-40">?</span>
+                  <span className="text-[11px]">Press spin to reveal</span>
+                  <span className="text-[9px] text-[#2e2e35]">Common 60% · Rare 35% · Legendary 10%</span>
                 </div>
               )}
             </div>
 
-            {/* Equip Choice or Spin Button */}
-            {rolledSkill && !isRolling ? (
-              <div className="w-full space-y-3">
-                <span className="text-xs font-mono text-zinc-300 block">
-                  Equip <strong>{rolledSkill.name}</strong> to:
-                </span>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => handleEquipRolled("primary")}
-                    className="py-3 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white font-bold font-mono text-xs rounded-xl transition-all shadow-md cursor-pointer"
+            {/* Actions */}
+            <div className="px-5 py-4 flex flex-col gap-2">
+              {rolledSkill && !isRolling ? (
+                <>
+                  <p className="text-[10px] font-mono text-[#7a7a85] text-center mb-1">
+                    Equip <strong className="text-[#e8e8ea]">{rolledSkill.name}</strong> to slot:
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <GameButton
+                      onClick={() => handleEquipRolled("primary")}
+                      variant="ghost"
+                      size="sm"
+                      className="justify-center"
+                    >
+                      Slot 1 [1]
+                    </GameButton>
+                    <GameButton
+                      onClick={() => handleEquipRolled("secondary")}
+                      variant="ghost"
+                      size="sm"
+                      className="justify-center"
+                    >
+                      Slot 2 [2]
+                    </GameButton>
+                  </div>
+                  <GameButton
+                    onClick={handleStartRoll}
+                    disabled={!canAffordGacha}
+                    variant="dim"
+                    size="sm"
+                    className="justify-center w-full mt-1"
                   >
-                    SLOT 1 [SPACE]
-                  </button>
-                  <button
-                    onClick={() => handleEquipRolled("secondary")}
-                    className="py-3 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white font-bold font-mono text-xs rounded-xl transition-all shadow-md cursor-pointer"
-                  >
-                    SLOT 2 [Q]
-                  </button>
-                </div>
-                <button
+                    Roll Again ({GACHA_COST} pts)
+                  </GameButton>
+                </>
+              ) : (
+                <GameButton
                   onClick={handleStartRoll}
-                  disabled={!canAffordGacha}
-                  className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs rounded-xl transition-colors cursor-pointer disabled:opacity-40"
+                  disabled={!canAffordGacha || isRolling}
+                  variant="primary"
+                  size="lg"
+                  className="w-full justify-center"
                 >
-                  Roll Again ({GACHA_COST} pts)
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={handleStartRoll}
-                disabled={!canAffordGacha || isRolling}
-                className="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 active:from-amber-600 active:to-orange-600 text-zinc-950 font-bold font-mono text-base rounded-2xl transition-all shadow-xl shadow-amber-500/25 disabled:opacity-40 cursor-pointer"
-              >
-                {isRolling ? "Rolling..." : `SPIN GACHA (${GACHA_COST} COINS)`}
-              </button>
-            )}
-
-            {/* Coin Balance Warning */}
-            <div className="mt-4 text-xs font-mono text-zinc-400 flex items-center gap-1.5">
-              <span>Your Coins:</span>
-              <strong className={`font-bold ${canAffordGacha ? "text-yellow-400" : "text-red-400"}`}>
-                {playerScore} pts
-              </strong>
-              {!canAffordGacha && (
-                <span className="text-red-400 text-[11px]">(Need {GACHA_COST} pts)</span>
+                  {isRolling ? "Rolling…" : `Spin (${GACHA_COST} pts)`}
+                </GameButton>
               )}
             </div>
           </div>

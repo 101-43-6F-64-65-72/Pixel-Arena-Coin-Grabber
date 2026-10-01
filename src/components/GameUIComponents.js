@@ -1,44 +1,43 @@
 "use client";
 
 /**
- * GameUIComponents: High-fidelity custom game buttons, panels, and badges
- * cropped from uiset.png, uiset2.png, and uiset3.png.
+ * GameUIComponents — Redesigned (UI Redesign Pass)
+ *
+ * Design principles:
+ *   - No rounded-3xl cards
+ *   - No gradient buttons
+ *   - No decorative corner dots
+ *   - No emoji icons as decoration
+ *   - Shape language: flat panels, 2px borders, clipped corners on key elements
+ *   - Single amber accent color
  */
 
+// ── Arena Button ─────────────────────────────────────────────────────────────
 export function GameButton({
   children,
   onClick,
   disabled = false,
-  variant = "orange", // "orange" | "green" | "blue" | "red" | "wood"
-  size = "md",        // "sm" | "md" | "lg"
-  icon = null,
+  variant = "primary", // "primary" | "ghost" | "danger" | "dim"
+  size = "md",         // "sm" | "md" | "lg"
   className = "",
   id,
   type = "button",
 }) {
-  const baseClasses =
-    "relative inline-flex items-center justify-center font-mono font-bold uppercase tracking-wider text-white select-none transition-all duration-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed active:translate-y-1 shadow-lg";
-
   const sizeClasses = {
-    sm: "px-4 py-2 text-xs rounded-xl",
-    md: "px-6 py-3.5 text-sm rounded-2xl",
-    lg: "px-8 py-4 text-base rounded-2xl",
+    sm: "px-4 py-1.5 text-xs",
+    md: "px-5 py-2.5 text-sm",
+    lg: "px-6 py-3 text-sm",
   }[size];
 
-  // Glossy button styles mapped to uiset.png color aesthetics
   const variantClasses = {
-    orange:
-      "bg-gradient-to-b from-amber-400 via-orange-500 to-orange-700 border-2 border-orange-300 shadow-orange-950/80 shadow-md text-amber-950 drop-shadow hover:brightness-110",
-    green:
-      "bg-gradient-to-b from-emerald-400 via-green-500 to-green-700 border-2 border-green-300 shadow-emerald-950/80 shadow-md text-emerald-950 drop-shadow hover:brightness-110",
-    blue:
-      "bg-gradient-to-b from-sky-400 via-blue-500 to-blue-700 border-2 border-blue-300 shadow-blue-950/80 shadow-md text-blue-950 drop-shadow hover:brightness-110",
-    red:
-      "bg-gradient-to-b from-rose-400 via-red-500 to-red-700 border-2 border-red-300 shadow-red-950/80 shadow-md text-white drop-shadow hover:brightness-110",
-    wood:
-      "bg-gradient-to-b from-amber-800 via-amber-900 to-amber-950 border-2 border-amber-600 shadow-amber-950/90 shadow-md text-amber-200 hover:brightness-110",
-    dark:
-      "bg-gradient-to-b from-zinc-800 to-zinc-950 border-2 border-zinc-700 shadow-black/80 shadow-md text-zinc-300 hover:text-white hover:border-zinc-500",
+    primary:
+      "bg-[#f5a623] text-[#0d0d0f] border border-[#f5a623] hover:bg-[#e09616] active:bg-[#c07f10] font-bold",
+    ghost:
+      "bg-transparent text-[#a0a0a8] border border-[#2e2e35] hover:border-[#46464f] hover:text-[#e8e8ea] active:bg-[#1c1c21]",
+    danger:
+      "bg-[#c0392b] text-white border border-[#922b21] hover:bg-[#a93226] active:bg-[#922b21] font-bold",
+    dim:
+      "bg-[#1c1c21] text-[#7a7a85] border border-[#2e2e35] hover:text-[#e8e8ea] hover:border-[#46464f] active:bg-[#16161a]",
   }[variant];
 
   return (
@@ -47,64 +46,163 @@ export function GameButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`${baseClasses} ${sizeClasses} ${variantClasses} ${className}`}
+      className={`
+        inline-flex items-center justify-center gap-2
+        font-mono uppercase tracking-wider
+        transition-colors duration-100
+        disabled:opacity-30 disabled:cursor-not-allowed
+        cursor-pointer select-none
+        ${sizeClasses} ${variantClasses} ${className}
+      `}
     >
-      {/* Glossy Reflection Highlight */}
-      <span className="absolute top-1 left-2 right-2 h-1/3 bg-white/25 rounded-t-xl pointer-events-none" />
-
-      <span className="relative z-10 flex items-center justify-center gap-2">
-        {icon && <span className="text-lg">{icon}</span>}
-        {children}
-      </span>
+      {children}
     </button>
   );
 }
 
-export function GamePanel({ children, className = "", title = null, icon = null }) {
+// ── Arena Panel — flat, no glass, no glows ────────────────────────────────
+export function GamePanel({ children, className = "", title = null }) {
   return (
     <div
-      className={`relative bg-zinc-900/95 border-2 border-amber-700/60 rounded-3xl p-6 shadow-2xl backdrop-blur-md ${className}`}
-      style={{
-        boxShadow: "0 20px 50px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)",
-      }}
+      className={`bg-[#1c1c21] border border-[#2e2e35] p-5 ${className}`}
     >
-      {/* Wood / Metal Corner Accents */}
-      <div className="absolute top-2 left-2 w-3 h-3 rounded-full bg-amber-600 border border-amber-400 shadow-sm" />
-      <div className="absolute top-2 right-2 w-3 h-3 rounded-full bg-amber-600 border border-amber-400 shadow-sm" />
-      <div className="absolute bottom-2 left-2 w-3 h-3 rounded-full bg-amber-600 border border-amber-400 shadow-sm" />
-      <div className="absolute bottom-2 right-2 w-3 h-3 rounded-full bg-amber-600 border border-amber-400 shadow-sm" />
-
       {title && (
-        <div className="flex items-center justify-center gap-2 pb-4 mb-4 border-b border-zinc-800">
-          {icon && <span className="text-2xl">{icon}</span>}
-          <h2 className="text-xl font-bold font-mono text-amber-400 uppercase tracking-wider">
+        <div className="pb-3 mb-4 border-b border-[#2e2e35]">
+          <h2 className="text-[#f5a623] text-xs font-mono font-bold uppercase tracking-[0.15em]">
             {title}
           </h2>
         </div>
       )}
-
       {children}
     </div>
   );
 }
 
-export function GameIconButton({ icon, onClick, title, color = "blue", className = "", id }) {
-  const colorMap = {
-    blue: "from-sky-400 to-blue-600 border-sky-300 text-white shadow-blue-950/60",
-    green: "from-emerald-400 to-green-600 border-green-300 text-white shadow-green-950/60",
-    orange: "from-amber-400 to-orange-600 border-orange-300 text-white shadow-orange-950/60",
-    red: "from-rose-400 to-red-600 border-red-300 text-white shadow-red-950/60",
-  }[color];
+// ── Ability Button — game HUD style ──────────────────────────────────────
+// Used in the skill bar dock
+export function AbilityButton({
+  label,
+  hotkey,
+  disabled = false,
+  cooldown = 0,        // remaining seconds
+  maxCooldown = 1,     // total CD for progress bar
+  active = false,      // skill is currently active
+  onClick,
+  id,
+  accentColor = "#f5a623", // CSS color string
+}) {
+  const cdPercent = maxCooldown > 0 ? Math.max(0, Math.min(1, cooldown / maxCooldown)) : 0;
+  const isOnCd = cooldown > 0;
 
   return (
     <button
       id={id}
       onClick={onClick}
-      title={title}
-      className={`relative w-11 h-11 rounded-full bg-gradient-to-b ${colorMap} border-2 flex items-center justify-center shadow-lg active:scale-90 transition-transform cursor-pointer select-none ${className}`}
+      disabled={disabled || isOnCd}
+      title={`${label} [${hotkey}]`}
+      className={`
+        relative flex flex-col items-center justify-between
+        w-14 h-14 p-1.5
+        border font-mono select-none cursor-pointer
+        transition-colors duration-100
+        disabled:cursor-not-allowed
+        ${active
+          ? "border-[#2ecc71] bg-[#0a2a16]"
+          : isOnCd
+          ? "border-[#2e2e35] bg-[#16161a] opacity-60"
+          : "border-[#2e2e35] bg-[#1c1c21] hover:border-[#46464f] active:bg-[#16161a]"
+        }
+      `}
+      style={{
+        // Clipped top-left corner for HUD feel
+        clipPath: "polygon(6px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 6px)",
+      }}
     >
-      <span className="absolute top-0.5 left-1.5 right-1.5 h-1/3 bg-white/35 rounded-t-full pointer-events-none" />
-      <span className="text-base drop-shadow relative z-10">{icon}</span>
+      {/* Cooldown sweep overlay */}
+      {isOnCd && (
+        <div
+          className="absolute inset-0 bg-black/70 flex items-end justify-center pb-1 cd-active"
+          style={{ zIndex: 10 }}
+        >
+          <span className="text-[10px] font-bold text-[#f5a623] tabular-nums">
+            {cooldown.toFixed(1)}
+          </span>
+        </div>
+      )}
+
+      {/* CD progress bar along bottom edge */}
+      {isOnCd && (
+        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2e2e35]">
+          <div
+            className="h-full transition-all duration-100"
+            style={{
+              width: `${(1 - cdPercent) * 100}%`,
+              background: accentColor,
+            }}
+          />
+        </div>
+      )}
+
+      {/* Active indicator strip */}
+      {active && (
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#2ecc71]" />
+      )}
+
+      {/* Hotkey */}
+      <span
+        className="text-[8px] font-bold self-start leading-none"
+        style={{ color: isOnCd ? "#4a4a55" : "#7a7a85" }}
+      >
+        {hotkey}
+      </span>
+
+      {/* Label */}
+      <span
+        className="text-[9px] font-bold uppercase tracking-tight leading-none self-end text-center w-full truncate"
+        style={{ color: isOnCd ? "#4a4a55" : active ? "#2ecc71" : "#e8e8ea" }}
+      >
+        {label}
+      </span>
     </button>
+  );
+}
+
+// ── Compact HP Bar ────────────────────────────────────────────────────────
+export function HpBar({ current, max = 100, className = "" }) {
+  const pct = Math.max(0, Math.min(100, (current / max) * 100));
+  const color =
+    pct > 50 ? "var(--c-hp-hi)"
+    : pct > 25 ? "var(--c-hp-mid)"
+    : "var(--c-hp-low)";
+
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      <div className="w-28 h-2 bg-[#16161a] border border-[#2e2e35] relative overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 transition-all duration-200"
+          style={{ width: `${pct}%`, background: color }}
+        />
+      </div>
+      <span className="text-[11px] font-mono tabular-nums" style={{ color }}>
+        {current}
+      </span>
+    </div>
+  );
+}
+
+// ── Stat Cell — number-primary display ───────────────────────────────────
+export function StatCell({ label, value, accent = false, className = "" }) {
+  return (
+    <div className={`flex flex-col items-center ${className}`}>
+      <span
+        className="text-base font-bold tabular-nums leading-none"
+        style={{ color: accent ? "#f5a623" : "#e8e8ea" }}
+      >
+        {value}
+      </span>
+      <span className="text-[9px] uppercase tracking-wider text-[#4a4a55] mt-0.5">
+        {label}
+      </span>
+    </div>
   );
 }
