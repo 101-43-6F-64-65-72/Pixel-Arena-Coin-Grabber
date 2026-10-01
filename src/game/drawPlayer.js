@@ -1,13 +1,14 @@
 import { getPlayerPalette } from "@/lib/arena";
+import { getGameImage, CHARACTER_SPRITE_FRAMES } from "@/game/spriteManager";
 
 /**
- * Draws a player on the canvas with deterministic color palette,
- * authoritative HP bar, shield aura, directional eyes, and defeated states.
+ * Draws player character with animated sci-fi runner sprite (uiset4.png),
+ * directional flipping, authoritative color glow, HP bar, and crown.
  *
  * @param {CanvasRenderingContext2D} ctx
- * @param {number} x        - Center X in world coordinates
- * @param {number} y        - Center Y in world coordinates
- * @param {number} size     - Diameter of player
+ * @param {number} x          - Center X in screen coordinates
+ * @param {number} y          - Center Y in screen coordinates
+ * @param {number} size       - Base player size
  * @param {Object} [options]
  */
 export function drawPlayer(ctx, x, y, size = 36, options = {}) {
@@ -22,10 +23,13 @@ export function drawPlayer(ctx, x, y, size = 36, options = {}) {
   const isLeader = options.isLeader ?? false;
   const isShielded = options.isShielded ?? false;
   const respawnSecs = options.respawnSecs ?? 0;
+  const isMoving = options.isMoving ?? false;
+  const facingLeft = options.facingLeft ?? false;
+  const animFrame = options.animFrame ?? 0;
 
-  const r = Math.max(14, size / 2);
+  const r = Math.max(16, size / 2);
 
-  // ── DEFEATED / DEAD GHOST STATE ─────────────────────────────────────────────
+  // ── DEFEATED / GHOST STATE ──────────────────────────────────────────────────
   if (!alive) {
     ctx.save();
     ctx.globalAlpha = 0.55;
@@ -42,11 +46,9 @@ export function drawPlayer(ctx, x, y, size = 36, options = {}) {
     // Tombstone X Eyes
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2;
-    // Left X
     ctx.beginPath();
     ctx.moveTo(x - 7, y - 5); ctx.lineTo(x - 3, y - 1);
     ctx.moveTo(x - 3, y - 5); ctx.lineTo(x - 7, y - 1);
-    // Right X
     ctx.moveTo(x + 3, y - 5); ctx.lineTo(x + 7, y - 1);
     ctx.moveTo(x + 7, y - 5); ctx.lineTo(x + 3, y - 1);
     ctx.stroke();
@@ -55,20 +57,20 @@ export function drawPlayer(ctx, x, y, size = 36, options = {}) {
     ctx.fillStyle = "#f87171";
     ctx.font = "bold 12px monospace, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(`💀 RESPAWNING IN ${Math.max(1, Math.ceil(respawnSecs))}s`, x, y + r + 16);
+    ctx.fillText(`💀 RESPAWNING IN ${Math.max(1, Math.ceil(respawnSecs))}s`, x, y + r + 18);
 
     ctx.restore();
     return;
   }
 
-  // ── ALIVE PLAYER RENDERING ──────────────────────────────────────────────────
+  // ── ALIVE CHARACTER RENDERING ───────────────────────────────────────────────
 
   // 1. Drop Shadow
   ctx.save();
-  ctx.globalAlpha = 0.3;
+  ctx.globalAlpha = 0.35;
   ctx.fillStyle = "#000000";
   ctx.beginPath();
-  ctx.ellipse(x, y + r * 0.85, r * 0.95, r * 0.35, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y + r * 1.05, r * 1.05, r * 0.35, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
@@ -76,67 +78,88 @@ export function drawPlayer(ctx, x, y, size = 36, options = {}) {
   if (isShielded) {
     ctx.save();
     ctx.strokeStyle = "#fbbf24";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3.5;
     ctx.shadowColor = "#f59e0b";
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = "rgba(245, 158, 11, 0.18)";
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = "rgba(245, 158, 11, 0.2)";
 
     ctx.beginPath();
-    ctx.arc(x, y, r + 8, 0, Math.PI * 2);
+    ctx.arc(x, y, r + 12, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.restore();
   }
 
-  // 3. Leader Glow Aura (if #1 leader and score > 0)
+  // 3. Authoritative Color Glow Aura
+  ctx.save();
+  ctx.strokeStyle = palette.body;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = palette.body;
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // 4. Leader Glow Aura (if #1 leader and score > 0)
   if (isLeader && score > 0) {
     ctx.save();
     ctx.strokeStyle = "#facc15"; // Gold glow
     ctx.lineWidth = 3.5;
     ctx.shadowColor = "#eab308";
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 14;
     ctx.beginPath();
-    ctx.arc(x, y, r + 3, 0, Math.PI * 2);
+    ctx.arc(x, y, r + 6, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }
 
-  // 4. Body (Authoritative Color)
-  ctx.fillStyle = palette.body;
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fill();
+  // 5. Draw Sci-Fi Character Sprite (uiset4.png)
+  const spriteImg = getGameImage("/uiset4.png");
+  if (spriteImg && spriteImg.complete && spriteImg.naturalWidth > 0) {
+    ctx.save();
+    ctx.translate(x, y);
 
-  // 5. Body Outline
-  ctx.strokeStyle = palette.stroke;
-  ctx.lineWidth = Math.max(2.5, r * 0.09);
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.stroke();
+    // Flip if facing left
+    if (facingLeft) {
+      ctx.scale(-1, 1);
+    }
 
-  // 6. Two Directional Eyes
-  const eyeOffset = r * 0.32;
-  const eyeRadius = Math.max(2.2, r * 0.16);
-  const eyeY = y - r * 0.22;
+    const frameIdx = isMoving ? animFrame % CHARACTER_SPRITE_FRAMES.length : 0;
+    const frame = CHARACTER_SPRITE_FRAMES[frameIdx];
 
-  ctx.fillStyle = "#09090b";
-  // Left eye
-  ctx.beginPath();
-  ctx.arc(x - eyeOffset, eyeY, eyeRadius, 0, Math.PI * 2);
-  ctx.fill();
-  // Right eye
-  ctx.beginPath();
-  ctx.arc(x + eyeOffset, eyeY, eyeRadius, 0, Math.PI * 2);
-  ctx.fill();
+    const targetH = r * 2.5;
+    const targetW = targetH * (frame.sw / frame.sh);
 
-  // 7. Leader Crown
+    ctx.drawImage(
+      spriteImg,
+      frame.sx, frame.sy, frame.sw, frame.sh,
+      -targetW / 2, -targetH / 2 - 2, targetW, targetH
+    );
+
+    ctx.restore();
+  } else {
+    // High-definition fallback while image loads
+    ctx.save();
+    ctx.fillStyle = palette.body;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = palette.stroke;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 6. Leader Crown
   if (isLeader && score > 0) {
     ctx.save();
     ctx.fillStyle = "#facc15";
     ctx.strokeStyle = "#ca8a04";
     ctx.lineWidth = 1.5;
-    const crownW = r * 0.8;
-    const crownH = r * 0.45;
+    const crownW = r * 0.9;
+    const crownH = r * 0.5;
     const crownY = y - r - crownH - 12;
 
     ctx.beginPath();
@@ -153,19 +176,22 @@ export function drawPlayer(ctx, x, y, size = 36, options = {}) {
     ctx.restore();
   }
 
-  // 8. Authoritative HP Bar
-  const barW = Math.max(40, r * 1.6);
-  const barH = 5;
+  // 7. Authoritative HP Bar (Glossy Wood/Game Style)
+  const barW = Math.max(44, r * 1.8);
+  const barH = 6;
   const barX = x - barW / 2;
-  const barY = y - r - 8;
+  const barY = y - r - 12;
   const hpPercent = Math.max(0, Math.min(1, hp / maxHp));
 
   ctx.save();
-  // Bar background
-  ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+  // Bar background & border
+  ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
   ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+  ctx.strokeStyle = "#475569";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX - 1, barY - 1, barW + 2, barH + 2);
 
-  // Health fill gradient
+  // Health fill
   if (hpPercent > 0.5) {
     ctx.fillStyle = "#22c55e"; // Green
   } else if (hpPercent > 0.25) {
@@ -176,7 +202,7 @@ export function drawPlayer(ctx, x, y, size = 36, options = {}) {
   ctx.fillRect(barX, barY, barW * hpPercent, barH);
   ctx.restore();
 
-  // 9. Nickname & Score Label
+  // 8. Nickname & Score Label
   if (nickname) {
     ctx.save();
     const fontSize = 11;
@@ -187,9 +213,9 @@ export function drawPlayer(ctx, x, y, size = 36, options = {}) {
     const label = `${nickname} (${score} pts)`;
     const textWidth = ctx.measureText(label).width;
     const labelH = fontSize + 4;
-    const labelY = barY - 3;
+    const labelY = barY - 4;
 
-    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
     ctx.fillRect(x - textWidth / 2 - 4, labelY - labelH, textWidth + 8, labelH);
 
     ctx.fillStyle = "#ffffff";
