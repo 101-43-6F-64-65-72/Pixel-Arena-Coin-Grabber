@@ -34,6 +34,17 @@ export function drawCombatEffects(ctx, effects = [], timestamp) {
       }
 
       case "damage_text": {
+        // Impact flash on the target
+        if (progress < 0.25 && fx.targetY) {
+          const flashProgress = progress / 0.25;
+          ctx.beginPath();
+          ctx.arc(fx.x, fx.targetY, 15 + flashProgress * 20, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.8 * (1 - flashProgress)})`;
+          ctx.shadowColor = "#ffffff";
+          ctx.shadowBlur = 10;
+          ctx.fill();
+        }
+
         // Floating damage indicator
         const alpha = Math.max(0, 1 - progress);
         const floatY = fx.y - progress * 32;

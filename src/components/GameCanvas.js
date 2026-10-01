@@ -157,6 +157,15 @@ export default function GameCanvas({
     }, 2500);
   };
 
+  const [killFeed, setKillFeed] = useState([]);
+  const addKillFeed = useCallback((killerId, victimId) => {
+    const id = Date.now() + Math.random();
+    setKillFeed((prev) => [{ id, killerId, victimId }, ...prev].slice(0, 4));
+    setTimeout(() => {
+      setKillFeed((prev) => prev.filter((k) => k.id !== id));
+    }, 4000);
+  }, []);
+
   const lastMoveDirRef = useRef({ dx: 1, dy: 0 });
 
   // ── Movement Sync Helper — Coalescing Queue ─────────────────────────────────
@@ -380,6 +389,7 @@ export default function GameCanvas({
           type: "damage_text",
           x: targetData.x,
           y: targetData.y - 20,
+          targetY: targetData.y,
           damage: res.damage_dealt,
           isBlocked: res.is_shielded,
           isKill: res.is_kill,
@@ -395,9 +405,17 @@ export default function GameCanvas({
               type: "damage_text",
               x: targetData.x,
               y: targetData.y - 20,
+              targetY: targetData.y,
               damage: res.damage_dealt,
               isBlocked: res.is_shielded,
               isKill: res.is_kill,
+              killerId: currentPlayerIdRef.current,
+              targetId: closestEnemyId,
+              knockback: {
+                targetId: closestEnemyId,
+                x: res.new_target_x,
+                y: res.new_target_y,
+              },
             },
           });
         }
@@ -406,6 +424,7 @@ export default function GameCanvas({
           showToast("🛡️ Enemy Shielded! Attack Blocked.");
         } else if (res.is_kill) {
           showToast("💀 ENEMY DEFEATED! (+1 Kill)");
+          addKillFeed(currentPlayerIdRef.current, closestEnemyId);
         }
       }
     } finally {
@@ -584,6 +603,19 @@ export default function GameCanvas({
     channel.on("broadcast", { event: "combat_fx" }, (event) => {
       const payload = event?.payload;
       if (!payload) return;
+
+      if (payload.isKill && payload.killerId && payload.targetId) {
+        addKillFeed(payload.killerId, payload.targetId);
+      }
+
+      if (payload.knockback && payload.knockback.targetId === currentPlayerIdRef.current) {
+        const pState = localPlayerStateRef.current;
+        pState.x = Number(payload.knockback.x) || pState.x;
+        pState.y = Number(payload.knockback.y) || pState.y;
+        serverAckPosRef.current = { x: pState.x, y: pState.y, seq: syncSeqRef.current };
+        latestDesiredPosRef.current = { x: pState.x, y: pState.y };
+        lastSyncedPosRef.current = { x: pState.x, y: pState.y };
+      }
 
       visualEffectsRef.current.push({
         id: `fx-${Date.now()}-${Math.random()}`,
@@ -1068,6 +1100,15 @@ export default function GameCanvas({
 
       ctx.restore();
 
+      // ── 11.5. Low HP State ────────────────────────────────────────────────
+      if (isAlive && myHp > 0 && myHp <= 25) {
+        ctx.save();
+        const pulse = Math.abs(Math.sin(epochNow / 200));
+        ctx.fillStyle = `rgba(239, 68, 68, ${0.1 + pulse * 0.15})`;
+        ctx.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+        ctx.restore();
+      }
+
       // ── 12. Waiting Phase Overlay ─────────────────────────────────────────
       if (currentPhase === "waiting") {
         ctx.save();
@@ -1111,22 +1152,44 @@ export default function GameCanvas({
   }, []); // Empty deps: engine runs exactly once per mount
 
   return (
-    <div className="relative w-full h-full flex items-center justify-center bg-[#0d0d0f]">
+    <div className="relative w-full h-full bg-[#0d0d0f]">
       <canvas
         ref={canvasRef}
         width={VIEWPORT_WIDTH}
         height={VIEWPORT_HEIGHT}
-        className="w-full h-auto max-w-[960px] aspect-[960/600] object-contain outline-none border border-[#2e2e35] bg-[#0d0d0f] cursor-crosshair"
+        style={{
+          display: "block",
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+        }}
+        className="outline-none cursor-crosshair"
         tabIndex={0}
         aria-label="Pixel Arena Viewport"
       />
 
-      {/* Combat toast — flat bar, not rounded pill */}
+      {/* Combat toast — flat bar */}
       {combatNotification && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-4 py-1.5 bg-[#1c1c21] border border-[#f5a623] text-[#f5a623] font-mono font-bold text-xs state-in">
           {combatNotification}
         </div>
       )}
+
+      {/* Kill Feed */}
+      <div className="absolute top-4 right-4 z-40 flex flex-col items-end gap-1 pointer-events-none">
+        {killFeed.map((kf) => {
+          const killer = players.find(p => p.id === kf.killerId);
+          const victim = players.find(p => p.id === kf.targetId);
+          if (!killer || !victim) return null;
+          return (
+            <div key={kf.id} className="bg-black/60 px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider text-white border border-[#3f3f46] state-in flex items-center gap-2 shadow-lg">
+              <span style={{ color: getPlayerPalette(killer.color_key).body }}>{killer.nickname}</span>
+              <span className="text-[#a0a0a8]">⚔</span>
+              <span style={{ color: getPlayerPalette(victim.color_key).body }}>{victim.nickname}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -12,7 +12,7 @@ export async function attackPlayer(targetPlayerId) {
   if (!targetPlayerId) return { success: false, reason: "missing_target" };
 
   try {
-    const { data, error } = await supabase.rpc("attack_player_safe", {
+    const { data, error } = await supabase.rpc("attack_player_safe_v2", {
       p_target_id: targetPlayerId,
     });
 

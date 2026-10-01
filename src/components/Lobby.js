@@ -163,7 +163,7 @@ export default function Lobby({
   };
 
   return (
-    <div className="min-h-screen bg-[#0d0d0f] text-[#e8e8ea] flex flex-col overflow-hidden">
+    <div className="h-screen bg-[#0d0d0f] text-[#e8e8ea] flex flex-col overflow-hidden">
 
       {/* ── Top HUD bar ─────────────────────────────────────────────────── */}
       <header className="flex items-center justify-between px-4 py-2 bg-[#16161a] border-b border-[#2e2e35] shrink-0">
@@ -231,35 +231,65 @@ export default function Lobby({
         </div>
       </header>
 
-      {/* ── Main: Arena + Sidebar ─────────────────────────────────────── */}
-      <main className="flex-1 flex overflow-hidden">
+      {/* ── Main: Arena + HUD ─────────────────────────────────────── */}
+      <main className="flex-1 flex flex-col overflow-hidden min-h-0">
 
-        {/* Canvas column */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Arena Area (Canvas + Floating Leaderboard) */}
+        <div className="flex-1 min-h-0 relative bg-[#0d0d0f] overflow-hidden">
+          <GameCanvas
+            roomId={room?.id}
+            currentPlayerId={currentPlayerId}
+            players={players}
+            coins={coins}
+            matchPhase={phase}
+            countdownSeconds={countdown}
+            isCollectiblesActive={isCollectiblesActive}
+            skillCooldowns={coreCds}
+            onSkillCooldownUpdate={handleSkillCooldownUpdate}
+          />
 
-          {/* Game Canvas — focal point */}
-          <div className="flex-1 flex items-center justify-center bg-[#0d0d0f] min-h-0">
-            <GameCanvas
-              roomId={room?.id}
-              currentPlayerId={currentPlayerId}
-              players={players}
-              coins={coins}
-              matchPhase={phase}
-              countdownSeconds={countdown}
-              isCollectiblesActive={isCollectiblesActive}
-              skillCooldowns={coreCds}
-              onSkillCooldownUpdate={handleSkillCooldownUpdate}
-            />
+          {/* Floating Leaderboard */}
+          <div className="absolute top-4 right-4 w-48 flex flex-col border border-[#2e2e35] bg-[#16161a]/90 backdrop-blur-sm pointer-events-none z-10">
+            <div className="px-3 py-2 border-b border-[#2e2e35] flex items-center justify-between">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#f5a623]">
+                Rankings
+              </span>
+              <span className="text-[10px] font-mono text-[#4a4a55]">
+                {playerCount}/{MAX_PLAYERS}
+              </span>
+            </div>
+            <ul className="flex flex-col">
+              {sortedPlayers.length > 0 ? (
+                sortedPlayers.map((player, index) => (
+                  <PlayerRow
+                    key={player.id}
+                    player={player}
+                    rank={index + 1}
+                    isMe={player.id === currentPlayerId}
+                    isHost={player.id === room?.host_id}
+                    isLeader={index === 0 && highestScore > 0}
+                    epochNow={epochNow}
+                  />
+                ))
+              ) : (
+                <li className="px-3 py-4 text-[11px] font-mono text-[#4a4a55]">
+                  Waiting for players…
+                </li>
+              )}
+            </ul>
           </div>
+        </div>
 
-          {/* ── Ability Dock ──────────────────────────────────────────── */}
-          <div className="shrink-0 flex items-center gap-1 bg-[#16161a] border-t border-[#2e2e35] px-3 py-2">
-            {/* Fixed combat abilities */}
+        {/* ── Bottom Bar (Ability Dock + Actions) ─────────────────────── */}
+        <div className="shrink-0 flex items-center justify-between bg-[#16161a] border-t border-[#2e2e35] px-4 py-2">
+          
+          {/* Left: Abilities */}
+          <div className="flex items-center gap-1">
             {[
-              { id: "attack",    label: "ATK",  hotkey: "SPC", cd: 0,                       maxCd: 1, color: "#e74c3c" },
-              { id: "dash",      label: "DASH", hotkey: "Q",   cd: coreCds.dash,             maxCd: 4, color: "#3b82f6" },
-              { id: "shield",    label: "SHLD", hotkey: "E",   cd: coreCds.shield,           maxCd: 8, color: "#f5a623" },
-              { id: "shockwave", label: "WAVE", hotkey: "R",   cd: coreCds.shockwave,        maxCd: 7, color: "#10b981" },
+              { id: "attack",    icon: "⚔️",  label: "ATTACK", hotkey: "SPACE", cd: 0,              maxCd: 1, color: "#e74c3c" },
+              { id: "dash",      icon: "⚡",  label: "DASH",   hotkey: "Q",     cd: coreCds.dash,    maxCd: 4, color: "#3b82f6" },
+              { id: "shield",    icon: "🛡️", label: "SHIELD", hotkey: "E",     cd: coreCds.shield,  maxCd: 8, color: "#f5a623" },
+              { id: "shockwave", icon: "💥",  label: "BURST",  hotkey: "R",     cd: coreCds.shockwave, maxCd: 7, color: "#10b981" },
             ].map((s) => {
               const isOnCd = s.cd > 0;
               const cdPct = s.maxCd > 0 ? Math.max(0, Math.min(1, s.cd / s.maxCd)) : 0;
@@ -268,7 +298,7 @@ export default function Lobby({
               return (
                 <div
                   key={s.id}
-                  className="relative flex flex-col items-center justify-between w-14 h-14 p-1.5 border font-mono select-none"
+                  className="relative flex flex-col items-center justify-between w-16 h-16 p-1.5 border font-mono select-none"
                   style={{
                     clipPath: "polygon(6px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 6px)",
                     background: isOnCd ? "#16161a" : "#1c1c21",
@@ -277,18 +307,16 @@ export default function Lobby({
                   }}
                   title={`${s.label} [${s.hotkey}]`}
                 >
-                  {/* CD overlay */}
                   {isOnCd && (
                     <div
                       className="absolute inset-0 bg-black/65 flex items-center justify-center cd-active"
                       style={{ zIndex: 10 }}
                     >
-                      <span className="text-[11px] font-bold text-[#f5a623] tabular-nums">
+                      <span className="text-sm font-bold text-[#f5a623] tabular-nums">
                         {s.cd.toFixed(1)}
                       </span>
                     </div>
                   )}
-                  {/* CD progress */}
                   {isOnCd && (
                     <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2e2e35]">
                       <div
@@ -297,13 +325,15 @@ export default function Lobby({
                       />
                     </div>
                   )}
-                  {/* Active top strip */}
-                  {!isOnCd && (
-                    <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: s.color }} />
-                  )}
-                  <span className="text-[8px] font-bold self-start text-[#4a4a55]">{s.hotkey}</span>
+                  <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: s.color }} />
+                  <span className="text-[8px] font-bold self-end text-[#4a4a55] leading-none z-10">
+                    [{s.hotkey}]
+                  </span>
+                  <span className="text-xl leading-none z-10" style={{ opacity: isOnCd ? 0.3 : 1 }}>
+                    {s.icon}
+                  </span>
                   <span
-                    className="text-[9px] font-bold uppercase tracking-tight self-end text-center w-full"
+                    className="text-[8px] font-bold uppercase tracking-tight text-center w-full z-10 leading-none"
                     style={{ color: isOnCd ? "#4a4a55" : "#e8e8ea" }}
                   >
                     {s.label}
@@ -312,53 +342,16 @@ export default function Lobby({
               );
             })}
 
-            {/* Separator */}
             <div className="w-px h-10 bg-[#2e2e35] mx-1" />
 
-            {/* Key guide */}
             <div className="ml-1 flex flex-col gap-1">
               <span className="text-[9px] font-mono text-[#4a4a55]">Move: WASD / Arrows</span>
               <span className="text-[9px] font-mono text-[#4a4a55]">Attack: Click / Space</span>
             </div>
           </div>
-        </div>
 
-        {/* ── Sidebar ─────────────────────────────────────────────────── */}
-        <aside className="w-48 shrink-0 flex flex-col border-l border-[#2e2e35] bg-[#16161a]">
-
-          {/* Leaderboard header */}
-          <div className="px-3 py-2 border-b border-[#2e2e35] flex items-center justify-between">
-            <span className="text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#f5a623]">
-              Rankings
-            </span>
-            <span className="text-[10px] font-mono text-[#4a4a55]">
-              {playerCount}/{MAX_PLAYERS}
-            </span>
-          </div>
-
-          {/* Leaderboard rows */}
-          <ul className="flex-1 overflow-y-auto">
-            {sortedPlayers.length > 0 ? (
-              sortedPlayers.map((player, index) => (
-                <PlayerRow
-                  key={player.id}
-                  player={player}
-                  rank={index + 1}
-                  isMe={player.id === currentPlayerId}
-                  isHost={player.id === room?.host_id}
-                  isLeader={index === 0 && highestScore > 0}
-                  epochNow={epochNow}
-                />
-              ))
-            ) : (
-              <li className="px-3 py-4 text-[11px] font-mono text-[#4a4a55]">
-                Waiting for players…
-              </li>
-            )}
-          </ul>
-
-          {/* Action buttons */}
-          <div className="p-3 border-t border-[#2e2e35] flex flex-col gap-2">
+          {/* Right: Actions */}
+          <div className="flex items-center gap-3">
             {isHost && phase === "waiting" && (
               <GameButton
                 id="btn-start-game"
@@ -366,14 +359,13 @@ export default function Lobby({
                 disabled={isStartingMatch}
                 variant="primary"
                 size="md"
-                className="w-full justify-center"
               >
                 {isStartingMatch ? "Starting…" : "Start Battle"}
               </GameButton>
             )}
             {phase === "waiting" && !isHost && (
-              <p className="text-[10px] font-mono text-[#4a4a55] text-center leading-snug">
-                Waiting for host to start the match.
+              <p className="text-[10px] font-mono text-[#4a4a55] leading-snug">
+                Waiting for host...
               </p>
             )}
             <GameButton
@@ -382,12 +374,12 @@ export default function Lobby({
               disabled={isLeaving}
               variant="ghost"
               size="sm"
-              className="w-full justify-center"
             >
               {isLeaving ? "Leaving…" : "Leave"}
             </GameButton>
           </div>
-        </aside>
+
+        </div>
       </main>
     </div>
   );
