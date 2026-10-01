@@ -7,6 +7,7 @@ import { Camera } from "@/game/camera";
 import { drawPlayer } from "@/game/drawPlayer";
 import { drawCoin } from "@/game/drawCoin";
 import { drawCombatEffects } from "@/game/drawCombat";
+import { drawArena } from "@/game/drawArena";
 import { collectCoin } from "@/lib/coins";
 import { updatePlayerPosition } from "@/lib/movement";
 import { attackPlayer, useDash, useShield, useShockwave, respawnPlayer } from "@/lib/combat";
@@ -100,6 +101,7 @@ export default function GameCanvas({
   const syncSeqRef            = useRef(0);
   const lastDbSyncTimeRef     = useRef(0);
   const pendingSyncRef        = useRef(false); // coalesced position waiting to send
+  const sentPosMapRef         = useRef(new Map()); // seq -> { x, y }
 
   // Initialise local position from DB once on first meaningful `players` update
   const hasInitializedPosRef = useRef(false);
@@ -169,33 +171,21 @@ export default function GameCanvas({
   const lastMoveDirRef = useRef({ dx: 1, dy: 0 });
 
   // ── Movement Sync Helper — Coalescing Queue ─────────────────────────────────
-  // This function is called from the RAF tick. It decides whether to send a
-  // new DB sync based on:
-  //   1. Not already in-flight
-  //   2. Meaningful distance moved since last sync
-  //   3. Minimum time since last sync (rate limiting)
-  //
-  // When in-flight, it sets pendingSyncRef so the completion handler sends
-  // the latest position immediately after the current RPC finishes.
   const performMovementSync = useCallback((pState, epochNow, canMove) => {
     if (!canMove || !currentPlayerIdRef.current) return;
 
     const desired = latestDesiredPosRef.current;
     const dist = Math.hypot(desired.x - lastSyncedPosRef.current.x, desired.y - lastSyncedPosRef.current.y);
 
-    // Cooldown check regardless of in-flight state
     const timeSinceLastSync = epochNow - lastDbSyncTimeRef.current;
     if (timeSinceLastSync < DB_SYNC_MIN_MS) return;
     if (dist < MIN_SYNC_DISTANCE && timeSinceLastSync < DB_SYNC_MAX_MS) return;
 
     if (syncInFlightRef.current) {
-      // Mark that there's a newer position waiting — the completion handler
-      // will pick it up immediately after the current RPC completes.
       pendingSyncRef.current = true;
       return;
     }
 
-    // Nothing in-flight — fire sync now
     _sendMovementSync(desired.x, desired.y, epochNow);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -205,75 +195,50 @@ export default function GameCanvas({
     lastDbSyncTimeRef.current = epochNow;
     lastSyncedPosRef.current  = { x, y };
     const currentSeq = ++syncSeqRef.current;
-
-    if (process.env.NODE_ENV === "development") {
-      const ack = serverAckPosRef.current;
-      const dist = Math.hypot(x - ack.x, y - ack.y);
-      const now = Date.now();
-      if (now - lastDebugLogTimeRef.current >= 1500) {
-        lastDebugLogTimeRef.current = now;
-        console.log(
-          `[MvSync] seq=${currentSeq} sending=(${x.toFixed(1)},${y.toFixed(1)}) ` +
-          `ack=(${ack.x.toFixed(1)},${ack.y.toFixed(1)}) drift=${dist.toFixed(1)}px`
-        );
-      }
-    }
+    sentPosMapRef.current.set(currentSeq, { x, y });
 
     updatePlayerPosition(x, y)
       .then((res) => {
         syncInFlightRef.current = false;
 
+        const sentPos = sentPosMapRef.current.get(currentSeq);
+        sentPosMapRef.current.delete(currentSeq);
+
         if (!res) return;
 
-        // Reject out-of-order responses (older seq than last acknowledged)
+        // Reject out-of-order / stale responses
         if (currentSeq < serverAckPosRef.current.seq) {
-          if (process.env.NODE_ENV === "development") {
-            console.log(`[MvSync] seq=${currentSeq} stale, dropping (ack.seq=${serverAckPosRef.current.seq})`);
-          }
           return;
         }
 
         const pState = localPlayerStateRef.current;
 
         if (res.success) {
-          // Server accepted this position.
-          // Update our acknowledged state — do NOT overwrite the predicted pState
-          // because the player may have moved further since we sent this request.
           serverAckPosRef.current = {
             x: Number(res.x),
             y: Number(res.y),
             seq: currentSeq,
           };
 
-          // Tiered reconciliation:
-          // Only apply server correction when the client has drifted substantially.
-          // This avoids backward jitter from stale server snapshots.
-          const discrepancy = Math.hypot(pState.x - Number(res.x), pState.y - Number(res.y));
+          // Account for movement predicted while the request was traveling
+          const dxSinceSend = sentPos ? pState.x - sentPos.x : 0;
+          const dySinceSend = sentPos ? pState.y - sentPos.y : 0;
+          const expectedX = Number(res.x) + dxSinceSend;
+          const expectedY = Number(res.y) + dySinceSend;
+
+          const discrepancy = Math.hypot(pState.x - expectedX, pState.y - expectedY);
 
           if (discrepancy >= RECONCILE_SNAP_THRESHOLD) {
-            // LARGE: Hard snap — indicates real cheat or teleport
-            pState.x = Number(res.x);
-            pState.y = Number(res.y);
-            if (process.env.NODE_ENV === "development") {
-              console.warn(`[MvSync] SNAP seq=${currentSeq} drift=${discrepancy.toFixed(1)}px → snapped to server`);
-            }
+            pState.x = expectedX;
+            pState.y = expectedY;
           } else if (discrepancy >= RECONCILE_LERP_THRESHOLD) {
-            // MEDIUM: Blend 30% toward server position in next frame(s)
-            // We simply nudge pState slightly toward the server ack.
-            // Full correction happens naturally over the next few frames.
-            const alpha = 0.3;
-            pState.x = pState.x + (Number(res.x) - pState.x) * alpha;
-            pState.y = pState.y + (Number(res.y) - pState.y) * alpha;
-            if (process.env.NODE_ENV === "development") {
-              console.log(`[MvSync] LERP seq=${currentSeq} drift=${discrepancy.toFixed(1)}px → nudging`);
-            }
+            const alpha = 0.2;
+            pState.x += (expectedX - pState.x) * alpha;
+            pState.y += (expectedY - pState.y) * alpha;
           }
-          // SMALL (<30px): Accept ack silently, keep current prediction
+          // SMALL discrepancy: Keep client prediction untouched
 
         } else if (res.reason === "movement_exceeded" || res.reason === "out_of_bounds") {
-          // Server rejected the position.
-          // Check discrepancy FIRST — if we've already predicted far beyond,
-          // it might be a stale rejection of an old snapshot.
           const discrepancy = Math.hypot(pState.x - Number(res.x), pState.y - Number(res.y));
           serverAckPosRef.current = {
             x: Number(res.x),
@@ -282,27 +247,15 @@ export default function GameCanvas({
           };
 
           if (discrepancy >= RECONCILE_SNAP_THRESHOLD) {
-            // Legitimately large disagreement — authoritative correction
             pState.x = Number(res.x);
             pState.y = Number(res.y);
-            if (process.env.NODE_ENV === "development") {
-              console.warn(`[MvSync] REJECTED+SNAP seq=${currentSeq} reason=${res.reason} drift=${discrepancy.toFixed(1)}px`);
-            }
           } else {
-            // Small rejection — likely stale network snapshot.
-            // Do NOT snap. Gentle nudge only to avoid oscillation.
-            const alpha = 0.15;
-            pState.x = pState.x + (Number(res.x) - pState.x) * alpha;
-            pState.y = pState.y + (Number(res.y) - pState.y) * alpha;
-            if (process.env.NODE_ENV === "development") {
-              console.log(`[MvSync] REJECTED+NUDGE seq=${currentSeq} reason=${res.reason} drift=${discrepancy.toFixed(1)}px`);
-            }
+            const alpha = 0.1;
+            pState.x += (Number(res.x) - pState.x) * alpha;
+            pState.y += (Number(res.y) - pState.y) * alpha;
           }
         }
-        // Other reasons (player_dead, game_finished) — no position update needed.
 
-        // Coalescing: if more movement happened while this RPC was in-flight,
-        // immediately fire the next sync with the latest desired position.
         if (pendingSyncRef.current) {
           const desired = latestDesiredPosRef.current;
           const dist = Math.hypot(desired.x - lastSyncedPosRef.current.x, desired.y - lastSyncedPosRef.current.y);
@@ -316,7 +269,6 @@ export default function GameCanvas({
       .catch(() => {
         syncInFlightRef.current = false;
         pendingSyncRef.current  = false;
-        // Network failure — reset sync state so next tick can retry
       });
   }
 
@@ -384,47 +336,64 @@ export default function GameCanvas({
           duration: 0.35,
         });
 
-        visualEffectsRef.current.push({
-          id: `dmg-${Date.now()}`,
-          type: "damage_text",
-          x: targetData.x,
-          y: targetData.y - 20,
-          targetY: targetData.y,
-          damage: res.damage_dealt,
-          isBlocked: res.is_shielded,
-          isKill: res.is_kill,
-          startTime: performance.now(),
-          duration: 0.9,
-        });
+        if (res.target_id && (res.damage_dealt > 0 || res.is_shielded)) {
+          const hitX = Number(res.new_target_x) || targetData.x;
+          const hitY = Number(res.new_target_y) || targetData.y;
 
-        if (channelRef.current) {
-          channelRef.current.send({
-            type: "broadcast",
-            event: "combat_fx",
-            payload: {
-              type: "damage_text",
-              x: targetData.x,
-              y: targetData.y - 20,
-              targetY: targetData.y,
-              damage: res.damage_dealt,
-              isBlocked: res.is_shielded,
-              isKill: res.is_kill,
-              killerId: currentPlayerIdRef.current,
-              targetId: closestEnemyId,
-              knockback: {
-                targetId: closestEnemyId,
-                x: res.new_target_x,
-                y: res.new_target_y,
-              },
-            },
+          visualEffectsRef.current.push({
+            id: `dmg-${Date.now()}`,
+            type: "damage_text",
+            x: hitX,
+            y: hitY - 20,
+            targetY: hitY,
+            damage: res.damage_dealt,
+            isBlocked: res.is_shielded,
+            isKill: res.is_kill,
+            startTime: performance.now(),
+            duration: 0.9,
           });
-        }
 
-        if (res.is_shielded) {
-          showToast("🛡️ Enemy Shielded! Attack Blocked.");
-        } else if (res.is_kill) {
-          showToast("💀 ENEMY DEFEATED! (+1 Kill)");
-          addKillFeed(currentPlayerIdRef.current, closestEnemyId);
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: "broadcast",
+              event: "combat_fx",
+              payload: {
+                type: "damage_text",
+                x: hitX,
+                y: hitY - 20,
+                targetY: hitY,
+                damage: res.damage_dealt,
+                isBlocked: res.is_shielded,
+                isKill: res.is_kill,
+                killerId: currentPlayerIdRef.current,
+                targetId: closestEnemyId,
+                knockback: {
+                  targetId: closestEnemyId,
+                  x: res.new_target_x,
+                  y: res.new_target_y,
+                },
+              },
+            });
+          }
+
+          if (res.is_shielded) {
+            showToast("🛡️ Enemy Shielded! Attack Blocked.");
+          } else if (res.is_kill) {
+            showToast("💀 ENEMY DEFEATED! (+1 Kill)");
+            addKillFeed(currentPlayerIdRef.current, closestEnemyId);
+          }
+        } else if (res.message === "Target out of attack range.") {
+          visualEffectsRef.current.push({
+            id: `miss-${Date.now()}`,
+            type: "damage_text",
+            x: targetData.x,
+            y: targetData.y - 20,
+            targetY: targetData.y,
+            isMiss: true,
+            startTime: performance.now(),
+            duration: 0.7,
+          });
+          showToast("⚠️ Target Out of Range");
         }
       }
     } finally {
@@ -443,23 +412,32 @@ export default function GameCanvas({
 
     try {
       const res = await useDash(dir.dx, dir.dy);
-      if (res && res.success) {
-        onSkillCooldownUpdateRef.current?.("dash", 4);
+      if (res) {
+        if (res.cooldown_until) {
+          const cdSecs = Math.max(0, (new Date(res.cooldown_until).getTime() - Date.now()) / 1000);
+          onSkillCooldownUpdateRef.current?.("dash", cdSecs);
+        }
 
-        // Authoritative dash: update both local prediction and ack state
-        const pState = localPlayerStateRef.current;
-        const nx = Number(res.new_x);
-        const ny = Number(res.new_y);
-        pState.x = nx;
-        pState.y = ny;
-        serverAckPosRef.current   = { x: nx, y: ny, seq: syncSeqRef.current };
-        latestDesiredPosRef.current = { x: nx, y: ny };
-        lastSyncedPosRef.current  = { x: nx, y: ny };
+        if (res.success) {
+          // Advance syncSeqRef to invalidate pre-dash movement RPCs
+          syncSeqRef.current += 100;
 
-        showToast("⚡ DASH!");
+          const pState = localPlayerStateRef.current;
+          const nx = Number(res.new_x);
+          const ny = Number(res.new_y);
+          pState.x = nx;
+          pState.y = ny;
+          serverAckPosRef.current     = { x: nx, y: ny, seq: syncSeqRef.current };
+          latestDesiredPosRef.current = { x: nx, y: ny };
+          lastSyncedPosRef.current    = { x: nx, y: ny };
+
+          showToast("⚡ DASH!");
+        } else if (res.message) {
+          showToast(`❌ ${res.message}`);
+        }
       }
     } finally {
-      setTimeout(() => { isDashingRef.current = false; }, 600);
+      setTimeout(() => { isDashingRef.current = false; }, 400);
     }
   }, []);
 
@@ -472,12 +450,20 @@ export default function GameCanvas({
     isShieldingRef.current = true;
     try {
       const res = await useShield();
-      if (res && res.success) {
-        onSkillCooldownUpdateRef.current?.("shield", 8);
-        showToast("🛡️ AEGIS SHIELD (2s)");
+      if (res) {
+        if (res.cooldown_until) {
+          const cdSecs = Math.max(0, (new Date(res.cooldown_until).getTime() - Date.now()) / 1000);
+          onSkillCooldownUpdateRef.current?.("shield", cdSecs);
+        }
+
+        if (res.success) {
+          showToast("🛡️ AEGIS SHIELD (2s)");
+        } else if (res.message) {
+          showToast(`❌ ${res.message}`);
+        }
       }
     } finally {
-      setTimeout(() => { isShieldingRef.current = false; }, 600);
+      setTimeout(() => { isShieldingRef.current = false; }, 400);
     }
   }, []);
 
@@ -490,38 +476,94 @@ export default function GameCanvas({
     isShockwavingRef.current = true;
     try {
       const res = await useShockwave();
-      if (res && res.success) {
-        onSkillCooldownUpdateRef.current?.("shockwave", 7);
-
-        const pState = localPlayerStateRef.current;
-        const now = performance.now();
-        visualEffectsRef.current.push({
-          id: `shock-${now}`,
-          type: "shockwave",
-          x: pState.x,
-          y: pState.y,
-          radius: 170,
-          startTime: now,
-          duration: 0.65,
-        });
-
-        if (channelRef.current) {
-          channelRef.current.send({
-            type: "broadcast",
-            event: "combat_fx",
-            payload: {
-              type: "shockwave",
-              x: pState.x,
-              y: pState.y,
-              radius: 170,
-            },
-          });
+      if (res) {
+        if (res.cooldown_until) {
+          const cdSecs = Math.max(0, (new Date(res.cooldown_until).getTime() - Date.now()) / 1000);
+          onSkillCooldownUpdateRef.current?.("shockwave", cdSecs);
         }
 
-        showToast(`💥 SHOCKWAVE! Hit ${res.hits_count} Enemies`);
+        if (res.success) {
+          const pState = localPlayerStateRef.current;
+          const now = performance.now();
+
+          visualEffectsRef.current.push({
+            id: `shock-${now}`,
+            type: "shockwave",
+            x: pState.x,
+            y: pState.y,
+            radius: 205,
+            startTime: now,
+            duration: 0.65,
+          });
+
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: "broadcast",
+              event: "combat_fx",
+              payload: {
+                type: "shockwave",
+                x: pState.x,
+                y: pState.y,
+                radius: 205,
+              },
+            });
+          }
+
+          const hitRows = res.rows || [];
+          const actualHits = hitRows.filter((r) => r.target_id);
+
+          for (const hit of actualHits) {
+            const hx = Number(hit.new_target_x) || pState.x;
+            const hy = Number(hit.new_target_y) || pState.y;
+
+            visualEffectsRef.current.push({
+              id: `dmg-shock-${Date.now()}-${hit.target_id}`,
+              type: "damage_text",
+              x: hx,
+              y: hy - 20,
+              targetY: hy,
+              damage: hit.damage_dealt,
+              isBlocked: hit.is_shielded,
+              isKill: hit.is_kill,
+              startTime: now,
+              duration: 0.95,
+            });
+
+            if (channelRef.current) {
+              channelRef.current.send({
+                type: "broadcast",
+                event: "combat_fx",
+                payload: {
+                  type: "damage_text",
+                  x: hx,
+                  y: hy - 20,
+                  targetY: hy,
+                  damage: hit.damage_dealt,
+                  isBlocked: hit.is_shielded,
+                  isKill: hit.is_kill,
+                  killerId: currentPlayerIdRef.current,
+                  targetId: hit.target_id,
+                  knockback: {
+                    targetId: hit.target_id,
+                    x: hit.new_target_x,
+                    y: hit.new_target_y,
+                  },
+                },
+              });
+            }
+
+            if (hit.is_kill) {
+              addKillFeed(currentPlayerIdRef.current, hit.target_id);
+            }
+          }
+
+          showToast(`💥 BURST! Hit ${actualHits.length} Enemies`);
+        } else if (res.message) {
+          showToast(`❌ ${res.message}`);
+        }
       }
     } finally {
-      setTimeout(() => { isShockwavingRef.current = false; }, 600);
+      setTimeout(() => { isShockwavingRef.current = false; }, 400);
     }
   }, []);
 
@@ -869,70 +911,80 @@ export default function GameCanvas({
             // The server validates collection distance independently.
             collectCoin(coin.id, currentMyId)
               .then((result) => {
+                const now = performance.now();
+                const pState = localPlayerStateRef.current;
+
                 if (!result || !result.success) {
                   coin.active = true;
+                } else {
+                  if (result.collectible_type === "heal") {
+                    const healAmt = typeof result.heal_amount === "number" ? result.heal_amount : (typeof result.heal_delta === "number" ? result.heal_delta : 0);
+                    if (healAmt > 0) {
+                      showToast(`💚 +${healAmt} HP HEALED!`);
+                      visualEffectsRef.current.push({
+                        id: `heal-${now}`,
+                        type: "pickup_text",
+                        x: pState.x,
+                        y: pState.y - 25,
+                        text: `+${healAmt} HP`,
+                        color: "#4ade80",
+                        glowColor: "#22c55e",
+                        startTime: now,
+                        duration: 0.85,
+                      });
+                    } else {
+                      showToast(`💛 HEAL FULL`);
+                      visualEffectsRef.current.push({
+                        id: `hpfull-${now}`,
+                        type: "pickup_text",
+                        x: pState.x,
+                        y: pState.y - 25,
+                        text: "HEAL FULL",
+                        color: "#facc15",
+                        glowColor: "#f59e0b",
+                        startTime: now,
+                        duration: 0.85,
+                      });
+                    }
+                  } else {
+                    const delta = result.score_delta || 1;
+                    const text = `+${delta}`;
+                    const color = delta === 3 ? "#facc15" : delta === 2 ? "#4ade80" : "#fef08a";
+                    const glow = delta === 3 ? "#f59e0b" : delta === 2 ? "#10b981" : "#eab308";
+
+                    visualEffectsRef.current.push({
+                      id: `coin-${now}`,
+                      type: "pickup_text",
+                      x: pState.x,
+                      y: pState.y - 25,
+                      text,
+                      color,
+                      glowColor: glow,
+                      startTime: now,
+                      duration: 0.75,
+                    });
+                  }
                 }
+                pendingSet.delete(coin.id);
               })
               .catch(() => {
                 coin.active = true;
-              })
-              .finally(() => {
                 pendingSet.delete(coin.id);
               });
           }
         }
       }
 
-      // ── 5. RENDER CANVAS (Camera-Relative) ────────────────────────────────
-      ctx.clearRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+      // ── 5. RENDER CANVAS (HD Arena Floor & Environment) ─────────────────
+      drawArena(ctx, camera, VIEWPORT_WIDTH, VIEWPORT_HEIGHT, timestamp);
 
-      // Arena Floor
-      const floorScreen = camera.worldToScreen(ARENA_PADDING, ARENA_PADDING);
-      const arenaW = WORLD_WIDTH  - ARENA_PADDING * 2;
-      const arenaH = WORLD_HEIGHT - ARENA_PADDING * 2;
-
-      ctx.fillStyle = "#18181b";
-      ctx.fillRect(floorScreen.x, floorScreen.y, arenaW, arenaH);
-
-      // Retro Floor Grid
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.035)";
-      ctx.lineWidth = 1;
-      const gridSize = 50;
-
-      const startGridX = Math.floor(camera.x / gridSize) * gridSize;
-      const endGridX   = Math.ceil((camera.x + VIEWPORT_WIDTH) / gridSize) * gridSize;
-      for (let gx = startGridX; gx <= endGridX; gx += gridSize) {
-        if (gx < ARENA_PADDING || gx > WORLD_WIDTH - ARENA_PADDING) continue;
-        const s = camera.worldToScreen(gx, ARENA_PADDING);
-        ctx.beginPath();
-        ctx.moveTo(s.x, camera.worldToScreen(gx, ARENA_PADDING).y);
-        ctx.lineTo(s.x, camera.worldToScreen(gx, WORLD_HEIGHT - ARENA_PADDING).y);
-        ctx.stroke();
-      }
-
-      const startGridY = Math.floor(camera.y / gridSize) * gridSize;
-      const endGridY   = Math.ceil((camera.y + VIEWPORT_HEIGHT) / gridSize) * gridSize;
-      for (let gy = startGridY; gy <= endGridY; gy += gridSize) {
-        if (gy < ARENA_PADDING || gy > WORLD_HEIGHT - ARENA_PADDING) continue;
-        const s = camera.worldToScreen(ARENA_PADDING, gy);
-        ctx.beginPath();
-        ctx.moveTo(camera.worldToScreen(ARENA_PADDING, gy).x, s.y);
-        ctx.lineTo(camera.worldToScreen(WORLD_WIDTH - ARENA_PADDING, gy).x, s.y);
-        ctx.stroke();
-      }
-
-      // Arena Border
-      ctx.strokeStyle = "#52525b";
-      ctx.lineWidth = 4;
-      ctx.strokeRect(floorScreen.x, floorScreen.y, arenaW, arenaH);
-
-      // ── 6. Draw Active Coins ──────────────────────────────────────────────
+      // ── 6. Draw Active Coins & Collectibles ──────────────────────────────
       const activeCoins = coinsRef.current || [];
       for (let i = 0; i < activeCoins.length; i++) {
         const coin = activeCoins[i];
         if (coin && coin.active && camera.isVisible(Number(coin.x), Number(coin.y), 20)) {
           const s = camera.worldToScreen(Number(coin.x), Number(coin.y));
-          drawCoin(ctx, s.x, s.y, COIN_RADIUS);
+          drawCoin(ctx, s.x, s.y, COIN_RADIUS, timestamp, coin.coin_type || "coin_1");
         }
       }
 

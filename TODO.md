@@ -79,10 +79,25 @@
 - [x] Multiplayer Realtime Sync & Combat FX: Melee slashes, floating damage numbers, shockwaves, shield spheres, and minimap radar.
 - [x] Upgraded Arena HUD: Health bar, Kills/Deaths counters, skill buttons with cooldowns, and color-coded leaderboard.
 
-## Phase 11: Vercel deployment.
+## Phase 12: HD Lightweight Arena & Reliable Authoritative Damage Feedback
+- [x] Authoritative Combat Validation & Latency Buffers: Enforced 110px range for melee attack and 205px radius for Burst skill with network latency buffers.
+- [x] Multi-Target Structured Skill Result (`use_shockwave_safe` RPC): Atomically computes HP reduction and knockback per hit target and returns hit rows.
+- [x] Authoritative Floating Damage Numbers (`src/game/drawCombat.js`): Dynamic upward float, font pop, outline stroke, starburst target impact flashes, `-20` / `🛡️ BLOCKED` / `💀 KILL` / `MISS` distinction.
+- [x] HD Procedural Vector Canvas Arena (`src/game/drawArena.js`): Multi-layered retro sci-fi grid, LED corner pillars, center tactical crosshairs, and ambient radial vignette shading without heavy 4K image textures.
+
+## Phase 13: Coin Variants, Score Values & Authoritative Heal Item System
+- [x] Implemented 3 Coin Types (`coin_1` +1, `coin_2` +2, `coin_3` +3) with server-determined score values and weighted spawn distribution (~60% Type 1, ~30% Type 2, ~10% Type 3).
+- [x] Implemented Authoritative Heal Item (`heal` +25 HP) with max 1 active per room, server spawn cooldown (15s), max 100 HP clamping, and `already_full` collection handling.
+- [x] Server-Authoritative DB logic (`supabase/migrations/20261001210000_phase13_coin_variants_heal_system.sql`): `collect_coin_safe` and `ensure_room_coins` RPCs enforcing RLS, distance checks, and atomic state updates.
+- [x] HD Visual Rendering (`src/game/drawCoin.js`): Distinct lightweight canvas visuals for `coin_1` (Bronze +1), `coin_2` (Emerald +2), `coin_3` (Amethyst +3 halo), and `heal` (Cyan Energy Cross Orb).
+- [x] Authoritative Pickup Floating Feedback (`src/game/drawCombat.js`): Animated floating text for score (`+1`, `+2`, `+3`) and health recovery (`+25 HP`).
+- [x] HUD Collectibles Legend (`src/components/Lobby.js`): Compact, non-intrusive legend overlay on top-left canvas.
+
+## Phase 14: Vercel deployment.
 - [ ] Deploy project to Vercel.
 - [ ] Configure environment variables in Vercel.
 - [ ] Verify live functionality.
+
 
 
 

@@ -102,6 +102,39 @@ export default function Lobby({
     shockwave: 0,
   });
 
+  // Sync skill cooldowns with authoritative DB timestamps (e.g., on mount / reconnect / refresh)
+  useEffect(() => {
+    if (!currentPlayer) return;
+    const now = Date.now();
+    const dashCd = currentPlayer.dash_cooldown_until
+      ? Math.max(0, (new Date(currentPlayer.dash_cooldown_until).getTime() - now) / 1000)
+      : 0;
+    const shieldCd = currentPlayer.shield_cooldown_until
+      ? Math.max(0, (new Date(currentPlayer.shield_cooldown_until).getTime() - now) / 1000)
+      : 0;
+    const shockwaveCd = currentPlayer.shockwave_cooldown_until
+      ? Math.max(0, (new Date(currentPlayer.shockwave_cooldown_until).getTime() - now) / 1000)
+      : 0;
+
+    setSkillCooldowns((prev) => {
+      const newDash = Math.max(prev.dash, dashCd);
+      const newShield = Math.max(prev.shield, shieldCd);
+      const newShock = Math.max(prev.shockwave, shockwaveCd);
+      if (
+        Math.abs(newDash - prev.dash) > 0.2 ||
+        Math.abs(newShield - prev.shield) > 0.2 ||
+        Math.abs(newShock - prev.shockwave) > 0.2
+      ) {
+        return { dash: newDash, shield: newShield, shockwave: newShock };
+      }
+      return prev;
+    });
+  }, [
+    currentPlayer?.dash_cooldown_until,
+    currentPlayer?.shield_cooldown_until,
+    currentPlayer?.shockwave_cooldown_until,
+  ]);
+
   useEffect(() => {
     const interval = setInterval(() => {
       setSkillCooldowns((prev) => {
@@ -120,7 +153,7 @@ export default function Lobby({
   }, []);
 
   const handleSkillCooldownUpdate = useCallback((skillKey, cooldownSecs) => {
-    setSkillCooldowns((prev) => ({ ...prev, [skillKey]: cooldownSecs }));
+    setSkillCooldowns((prev) => ({ ...prev, [skillKey]: Math.max(prev[skillKey] || 0, cooldownSecs) }));
   }, []);
 
   // Finished
@@ -161,6 +194,12 @@ export default function Lobby({
     shield: skillCooldowns.shield,
     shockwave: skillCooldowns.shockwave,
   };
+
+  // Collectible type counts
+  const c1Count = coins?.filter((c) => c.active && (c.coin_type === "coin_1" || !c.coin_type))?.length ?? 0;
+  const c2Count = coins?.filter((c) => c.active && c.coin_type === "coin_2")?.length ?? 0;
+  const c3Count = coins?.filter((c) => c.active && c.coin_type === "coin_3")?.length ?? 0;
+  const healCount = coins?.filter((c) => c.active && c.coin_type === "heal")?.length ?? 0;
 
   return (
     <div className="h-screen bg-[#0d0d0f] text-[#e8e8ea] flex flex-col overflow-hidden">
@@ -248,6 +287,36 @@ export default function Lobby({
             onSkillCooldownUpdate={handleSkillCooldownUpdate}
           />
 
+          {/* Floating Collectibles Legend */}
+          <div className="absolute top-4 left-4 border border-[#2e2e35] bg-[#16161a]/90 backdrop-blur-sm px-3 py-2 pointer-events-none z-10 flex flex-col gap-1 select-none">
+            <div className="flex items-center justify-between border-b border-[#2e2e35] pb-1 gap-4">
+              <span className="text-[9px] font-mono font-bold uppercase tracking-[0.15em] text-[#f5a623]">
+                Collectibles
+              </span>
+              <span className="text-[9px] font-mono text-[#7a7a85] tabular-nums">
+                Total: {activeCoinCount}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-[10px] font-mono mt-0.5">
+              <span className="flex items-center gap-1 text-[#f1c40f]">
+                <span className="w-2 h-2 rounded-full bg-[#f1c40f] border border-[#f39c12] inline-block shrink-0" />
+                <span>T1 <b className="text-[#e8e8ea]">+1</b> <span className="text-[#a0a0a8] font-bold">({c1Count})</span></span>
+              </span>
+              <span className="flex items-center gap-1 text-[#2ecc71]">
+                <span className="w-2 h-2 rounded-full bg-[#2ecc71] border border-[#27ae60] inline-block shrink-0" />
+                <span>T2 <b className="text-[#e8e8ea]">+2</b> <span className="text-[#a0a0a8] font-bold">({c2Count})</span></span>
+              </span>
+              <span className="flex items-center gap-1 text-[#a855f7]">
+                <span className="w-2 h-2 rounded-full bg-[#a855f7] border border-[#7e22ce] inline-block shrink-0" />
+                <span>T3 <b className="text-[#e8e8ea]">+3</b> <span className="text-[#a0a0a8] font-bold">({c3Count})</span></span>
+              </span>
+              <span className="flex items-center gap-1 text-[#00ffcc]">
+                <span className="w-2 h-2 bg-[#00ffcc] border border-[#00cc99] rotate-45 inline-block shrink-0" />
+                <span>Heal <b className="text-[#00ffcc]">+25 HP</b> <span className="text-[#a0a0a8] font-bold">({healCount})</span></span>
+              </span>
+            </div>
+          </div>
+
           {/* Floating Leaderboard */}
           <div className="absolute top-4 right-4 w-48 flex flex-col border border-[#2e2e35] bg-[#16161a]/90 backdrop-blur-sm pointer-events-none z-10">
             <div className="px-3 py-2 border-b border-[#2e2e35] flex items-center justify-between">
@@ -289,7 +358,7 @@ export default function Lobby({
               { id: "attack",    icon: "⚔️",  label: "ATTACK", hotkey: "SPACE", cd: 0,              maxCd: 1, color: "#e74c3c" },
               { id: "dash",      icon: "⚡",  label: "DASH",   hotkey: "Q",     cd: coreCds.dash,    maxCd: 4, color: "#3b82f6" },
               { id: "shield",    icon: "🛡️", label: "SHIELD", hotkey: "E",     cd: coreCds.shield,  maxCd: 8, color: "#f5a623" },
-              { id: "shockwave", icon: "💥",  label: "BURST",  hotkey: "R",     cd: coreCds.shockwave, maxCd: 7, color: "#10b981" },
+              { id: "shockwave", icon: "💥",  label: "BURST",  hotkey: "R",     cd: coreCds.shockwave, maxCd: 6, color: "#10b981" },
             ].map((s) => {
               const isOnCd = s.cd > 0;
               const cdPct = s.maxCd > 0 ? Math.max(0, Math.min(1, s.cd / s.maxCd)) : 0;
@@ -302,18 +371,18 @@ export default function Lobby({
                   style={{
                     clipPath: "polygon(6px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 6px)",
                     background: isOnCd ? "#16161a" : "#1c1c21",
-                    borderColor: isOnCd ? "#2e2e35" : "#46464f",
+                    borderColor: isOnCd ? "#2e2e35" : canUse ? s.color : "#46464f",
                     opacity: canUse || !isOnCd ? 1 : 0.5,
                   }}
                   title={`${s.label} [${s.hotkey}]`}
                 >
                   {isOnCd && (
                     <div
-                      className="absolute inset-0 bg-black/65 flex items-center justify-center cd-active"
+                      className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center cd-active"
                       style={{ zIndex: 10 }}
                     >
-                      <span className="text-sm font-bold text-[#f5a623] tabular-nums">
-                        {s.cd.toFixed(1)}
+                      <span className="text-xs font-bold text-[#f5a623] tabular-nums">
+                        {s.cd.toFixed(1)}s
                       </span>
                     </div>
                   )}
@@ -332,12 +401,18 @@ export default function Lobby({
                   <span className="text-xl leading-none z-10" style={{ opacity: isOnCd ? 0.3 : 1 }}>
                     {s.icon}
                   </span>
-                  <span
-                    className="text-[8px] font-bold uppercase tracking-tight text-center w-full z-10 leading-none"
-                    style={{ color: isOnCd ? "#4a4a55" : "#e8e8ea" }}
-                  >
-                    {s.label}
-                  </span>
+                  {!isOnCd && s.id !== "attack" ? (
+                    <span className="text-[7px] font-bold uppercase tracking-wider text-[#2ecc71] z-10 leading-none">
+                      READY
+                    </span>
+                  ) : (
+                    <span
+                      className="text-[8px] font-bold uppercase tracking-tight text-center w-full z-10 leading-none"
+                      style={{ color: isOnCd ? "#4a4a55" : "#e8e8ea" }}
+                    >
+                      {s.label}
+                    </span>
+                  )}
                 </div>
               );
             })}

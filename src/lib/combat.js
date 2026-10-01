@@ -12,7 +12,7 @@ export async function attackPlayer(targetPlayerId) {
   if (!targetPlayerId) return { success: false, reason: "missing_target" };
 
   try {
-    const { data, error } = await supabase.rpc("attack_player_safe_v2", {
+    const { data, error } = await supabase.rpc("attack_player_safe", {
       p_target_id: targetPlayerId,
     });
 
@@ -83,14 +83,19 @@ export async function useShockwave() {
 
     if (error) {
       console.error("[Combat] use_shockwave_safe error:", error);
-      return { success: false, reason: error.message };
+      return { success: false, reason: error.message, rows: [] };
     }
 
-    const row = Array.isArray(data) ? data[0] : data;
-    return row || { success: false };
+    const rows = Array.isArray(data) ? data : data ? [data] : [];
+    const first = rows[0] || { success: false };
+    return {
+      success: first.success,
+      cooldown_until: first.cooldown_until,
+      rows: rows.filter((r) => r.success),
+    };
   } catch (err) {
     console.error("[Combat] useShockwave exception:", err);
-    return { success: false, reason: err.message };
+    return { success: false, reason: err.message, rows: [] };
   }
 }
 

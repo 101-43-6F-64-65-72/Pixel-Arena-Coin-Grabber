@@ -1,5 +1,6 @@
 /**
- * Combat Visual Effects Rendering (Slashes, Damage Numbers, Shockwaves, Shield Spheres)
+ * High-Definition Combat Visual Effects & Floating Text Renderer
+ * Supports Damage Numbers, Miss Alerts, Score Pickup Texts (+1, +2, +3), and Heal Texts (+25 HP).
  */
 
 export function drawCombatEffects(ctx, effects = [], timestamp) {
@@ -12,12 +13,12 @@ export function drawCombatEffects(ctx, effects = [], timestamp) {
 
     switch (fx.type) {
       case "melee_slash": {
-        // Attack slash swipe arc
+        // Melee Attack Slash Arc
         const alpha = Math.max(0, 1 - progress);
         ctx.strokeStyle = fx.color || "#f87171";
         ctx.lineWidth = 4 * (1 - progress * 0.5);
         ctx.shadowColor = fx.color || "#ef4444";
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 14;
 
         const radius = fx.radius || 36;
         const angle = fx.angle || 0;
@@ -34,46 +35,104 @@ export function drawCombatEffects(ctx, effects = [], timestamp) {
       }
 
       case "damage_text": {
-        // Impact flash on the target
+        // 1. High-Brightness Starburst Impact Flash over Target Position
         if (progress < 0.25 && fx.targetY) {
           const flashProgress = progress / 0.25;
+          ctx.save();
           ctx.beginPath();
-          ctx.arc(fx.x, fx.targetY, 15 + flashProgress * 20, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255, 255, 255, ${0.8 * (1 - flashProgress)})`;
-          ctx.shadowColor = "#ffffff";
-          ctx.shadowBlur = 10;
+          ctx.arc(fx.x, fx.targetY, 12 + flashProgress * 22, 0, Math.PI * 2);
+          ctx.fillStyle = fx.isBlocked
+            ? `rgba(251, 191, 36, ${0.85 * (1 - flashProgress)})`
+            : `rgba(255, 255, 255, ${0.9 * (1 - flashProgress)})`;
+          ctx.shadowColor = fx.isBlocked ? "#f59e0b" : "#ffffff";
+          ctx.shadowBlur = 14;
           ctx.fill();
+          ctx.restore();
         }
 
-        // Floating damage indicator
+        // 2. Floating Damage Indicator
         const alpha = Math.max(0, 1 - progress);
-        const floatY = fx.y - progress * 32;
+        const floatY = fx.y - progress * 38;
+        const scale = progress < 0.15 ? 0.7 + (progress / 0.15) * 0.4 : 1.1 - (progress - 0.15) * 0.12;
+
+        ctx.save();
+        ctx.translate(fx.x, floatY);
+        ctx.scale(scale, scale);
         ctx.globalAlpha = alpha;
-        ctx.font = "bold 14px monospace, sans-serif";
+
+        const fontSize = fx.isKill ? 18 : 16;
+        ctx.font = `bold ${fontSize}px monospace, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
-        if (fx.isBlocked) {
-          ctx.fillStyle = "#fbbf24";
-          ctx.shadowColor = "#f59e0b";
-          ctx.shadowBlur = 8;
-          ctx.fillText("🛡️ BLOCKED", fx.x, floatY);
+        let text = "";
+        let fillCol = "#f87171";
+        let shadowCol = "#ef4444";
+
+        if (fx.isMiss) {
+          text = "MISS";
+          fillCol = "#94a3b8";
+          shadowCol = "#64748b";
+        } else if (fx.isBlocked) {
+          text = "🛡️ BLOCKED";
+          fillCol = "#fbbf24";
+          shadowCol = "#f59e0b";
         } else if (fx.isKill) {
-          ctx.fillStyle = "#ef4444";
-          ctx.shadowColor = "#dc2626";
-          ctx.shadowBlur = 10;
-          ctx.fillText(`💀 -${fx.damage} (KILL)`, fx.x, floatY);
+          text = `💀 -${fx.damage} (KILL)`;
+          fillCol = "#ef4444";
+          shadowCol = "#dc2626";
         } else {
-          ctx.fillStyle = "#f87171";
-          ctx.shadowColor = "#ef4444";
-          ctx.shadowBlur = 6;
-          ctx.fillText(`-${fx.damage}`, fx.x, floatY);
+          text = `-${fx.damage}`;
+          fillCol = "#f87171";
+          shadowCol = "#ef4444";
         }
+
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+        ctx.lineWidth = 4;
+        ctx.strokeText(text, 0, 0);
+
+        ctx.fillStyle = fillCol;
+        ctx.shadowColor = shadowCol;
+        ctx.shadowBlur = 10;
+        ctx.fillText(text, 0, 0);
+
+        ctx.restore();
+        break;
+      }
+
+      case "pickup_text": {
+        // Floating Score (+1, +2, +3) or Heal (+25 HP) Indicator
+        const alpha = Math.max(0, 1 - progress);
+        const floatY = fx.y - progress * 32;
+        const scale = progress < 0.15 ? 0.8 + (progress / 0.15) * 0.35 : 1.05 - (progress - 0.15) * 0.08;
+
+        ctx.save();
+        ctx.translate(fx.x, floatY);
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = alpha;
+
+        ctx.font = "bold 15px monospace, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const text = fx.text || "+1";
+        const fillCol = fx.color || "#4ade80";
+        const shadowCol = fx.glowColor || "#22c55e";
+
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+        ctx.lineWidth = 3.5;
+        ctx.strokeText(text, 0, 0);
+
+        ctx.fillStyle = fillCol;
+        ctx.shadowColor = shadowCol;
+        ctx.shadowBlur = 12;
+        ctx.fillText(text, 0, 0);
+
+        ctx.restore();
         break;
       }
 
       case "shockwave": {
-        // Shockwave skill expanding ring
         const currentRadius = fx.radius * Math.sin((progress * Math.PI) / 2);
         const alpha = Math.max(0, 1 - progress);
 
@@ -86,7 +145,6 @@ export function drawCombatEffects(ctx, effects = [], timestamp) {
         ctx.arc(fx.x, fx.y, currentRadius, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Secondary ripple
         if (progress > 0.15) {
           ctx.strokeStyle = `rgba(252, 165, 165, ${alpha * 0.6})`;
           ctx.lineWidth = 2.5;
@@ -98,7 +156,6 @@ export function drawCombatEffects(ctx, effects = [], timestamp) {
       }
 
       case "dash_trail": {
-        // Fast blur dash particles
         const alpha = Math.max(0, 1 - progress);
         ctx.fillStyle = fx.color || "rgba(56, 189, 248, 0.7)";
         ctx.shadowColor = fx.color || "#38bdf8";

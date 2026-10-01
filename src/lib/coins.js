@@ -31,10 +31,10 @@ export async function getRoomCoins(roomId) {
 /**
  * Ensures coins exist for a room via ensure_room_coins RPC.
  * @param {string} roomId
- * @param {number} [count=10]
- * @returns {Promise<Array<{ id: string, room_id: string, x: number, y: number, active: boolean }>>}
+ * @param {number} [count=60]
+ * @returns {Promise<Array<{ id: string, room_id: string, x: number, y: number, active: boolean, coin_type: string }>>}
  */
-export async function ensureRoomCoins(roomId, count = 10) {
+export async function ensureRoomCoins(roomId, count = 60) {
   const { data, error } = await supabase.rpc("ensure_room_coins", {
     p_room_id: roomId,
     p_count: count,
@@ -67,5 +67,13 @@ export async function collectCoin(coinId, playerId = null) {
   }
 
   const result = Array.isArray(data) ? data[0] : data;
+  if (result && typeof result.message === "string" && result.message.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(result.message);
+      return { ...result, ...parsed };
+    } catch {
+      // fallback
+    }
+  }
   return result;
 }

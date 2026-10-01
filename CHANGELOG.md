@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 ### Added
+- Phase 13: 3 Coin Types (`coin_1` +1, `coin_2` +2, `coin_3` +3) with server-determined score values and weighted spawn distribution (~60% Type 1, ~30% Type 2, ~10% Type 3).
+- Phase 13: Authoritative Heal Item (`heal` +25 HP) with maximum 1 active per room, 15-second server-enforced spawn cooldown (`last_heal_spawned_at`), HP clamping to max 100 HP, and `already_full` rejection handling.
+- Phase 13: Migration file `supabase/migrations/20261001210000_phase13_coin_variants_heal_system.sql` extending `coins` schema with `coin_type` check constraint and updating `collect_coin_safe` and `ensure_room_coins` RPCs for server-authoritative score & heal logic.
+- Phase 13: Lightweight HD Canvas Visual Renderer (`src/game/drawCoin.js`) for `coin_1` (Bronze +1), `coin_2` (Emerald +2), `coin_3` (Amethyst +3 halo), and `heal` (Cyan Energy Cross Orb).
+- Phase 13: Authoritative Floating Pickup Feedback (`src/game/drawCombat.js`) rendering pop-up text for collected coins (`+1`, `+2`, `+3`) and health recovery (`+25 HP`).
+- Phase 13: Compact Collectibles Legend HUD overlay (`src/components/Lobby.js`) on canvas top-left showing coin values and heal item specs.
+- Phase 12: High-Definition Procedural Canvas Arena Renderer (`src/game/drawArena.js`) with multi-layered floor grid, LED corner pillars, glowing intersection dots, center tactical crosshairs, and ambient vignette shading.
+- Phase 12: Authoritative Multi-Target Skill Combat Result (`use_shockwave_safe` RPC) returning structured array of hit targets, actual damage dealt, shield blocked status, and updated target HP/position.
+- Phase 12: Authoritative Floating Damage Numbers & Starburst Impact FX (`src/game/drawCombat.js`) with pop animation, text outline stroke, and explicit distinction between normal damage (`-20`), blocked hits (`🛡️ BLOCKED`), lethal kills (`💀 KILL`), and range misses (`MISS`).
+- Phase 12: Latency-buffered combat distance validation (110px melee range, 205px Burst radius) preventing false miss rejections under variable ping.
+- Phase 12: Migration file `supabase/migrations/20261001200000_phase12_hd_arena_reliable_damage.sql`.
 - Phase 10: Deterministic Player Color Identity with `players.color_key` (`orange`, `purple`, `blue`, `green`) assigned atomically during `create_room_safe` and `join_room_safe` with advisory lock serialization.
 - Phase 10: 2000x1200 Large World and 2D smooth camera tracking (`src/game/camera.js`) with viewport culling, boundary clamping, and mini-radar map.
 - Phase 10: Authoritative Basic Attack (`attack_player_safe` RPC) dealing 20 HP melee damage within 90px range with shield absorption and kill/death tracking.

@@ -74,7 +74,7 @@ export default function LobbyPage() {
       setPlayers(ps);
 
       try {
-        const initialCoins = await ensureRoomCoins(roomId, 15);
+        const initialCoins = await ensureRoomCoins(roomId, 60);
         setCoins(initialCoins.filter((c) => c.active));
       } catch (coinErr) {
         console.warn("[LobbyPage] ensureRoomCoins warning:", coinErr);
@@ -96,7 +96,7 @@ export default function LobbyPage() {
     }
   }, [currentPlayerId, loadRoom]);
 
-  // ── Live Match Timer Clock ──────────────────────────────────────────────────
+  // ── Live Match Timer Clock & Collectible Maintenance ────────────────────────
   // Derives match lifecycle state every 200ms based on authoritative DB timestamps
   useEffect(() => {
     if (!room) return;
@@ -127,7 +127,22 @@ export default function LobbyPage() {
     updateClock();
     const timer = setInterval(updateClock, 200);
 
-    return () => clearInterval(timer);
+    // Periodic maintenance for Heal Orb spawns & coin density (every 10 seconds during match)
+    const maintenanceTimer = setInterval(() => {
+      const currentRoom = roomRef.current;
+      if (currentRoom && currentRoom.status === "playing") {
+        ensureRoomCoins(currentRoom.id, 60).then((activeSet) => {
+          if (Array.isArray(activeSet)) {
+            setCoins(activeSet.filter((c) => c.active));
+          }
+        }).catch(() => {});
+      }
+    }, 10000);
+
+    return () => {
+      clearInterval(timer);
+      clearInterval(maintenanceTimer);
+    };
   }, [room]);
 
   // ── Supabase Realtime subscription ─────────────────────────────────────────
@@ -176,6 +191,8 @@ export default function LobbyPage() {
         if (!updatedCoin.active) {
           return prev.filter((c) => c.id !== updatedCoin.id);
         }
+        const exists = prev.some((c) => c.id === updatedCoin.id);
+        if (!exists) return [...prev, updatedCoin];
         return prev.map((c) => (c.id === updatedCoin.id ? { ...c, ...updatedCoin } : c));
       });
     }
